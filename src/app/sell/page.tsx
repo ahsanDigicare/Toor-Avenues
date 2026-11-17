@@ -1,0 +1,11 @@
+import type { Metadata } from "next";
+import { InnerCta, InnerPage, PageHero } from "../site-components";
+
+export const metadata: Metadata = { title: "Sell Your Calgary Home | ToorAvenues", description: "Prepare, price, market, negotiate, and sell your Calgary home with a personalized ToorAvenues strategy." };
+const steps = [["Prepare","Identify improvements, presentation opportunities, and the right timing."],["Price","Use comparable sales and current market conditions to establish a clear position."],["Launch","Present the property with professional marketing across the channels buyers use."],["Negotiate","Evaluate price, conditions, possession, and risk—not just the headline offer."],["Close","Coordinate conditions, documents, dates, and the final transition."]];
+
+export default function SellPage() {
+  return <InnerPage><PageHero eyebrow="SELL WITH CONFIDENCE" title="A selling strategy designed around your home." copy="Thoughtful preparation, evidence-based pricing, standout marketing, and skilled negotiation from listing to closing." image="architecture.png" />
+    <section className="inner-section shell"><div className="content-split"><div><p className="section-label">YOUR HOME, POSITIONED TO SUCCEED</p><h2>More than putting a sign on the lawn.</h2></div><div><p>Selling well begins before the listing goes live. We help you understand what buyers are responding to, where preparation will make a difference, and how to enter the market with a confident plan.</p><p>Throughout the process, you receive direct communication and practical advice about showings, feedback, offers, conditions, and closing.</p></div></div><div className="step-list">{steps.map(([title, copy], index) => <article key={title}><span>0{index + 1}</span><h3>{title}</h3><p>{copy}</p></article>)}</div></section>
+    <section className="evaluation-panel shell"><div><p>COMPLIMENTARY MARKET EVALUATION</p><h2>What could your home sell for?</h2><span>Request a property-specific review of comparable sales, competition, and current buyer activity.</span></div><a className="button green" href="/contact?interest=home-value">Request my home value</a></section><InnerCta title="Thinking about selling?" copy="Even if your move is months away, an early conversation can help you prepare with clarity." /></InnerPage>;
+}
