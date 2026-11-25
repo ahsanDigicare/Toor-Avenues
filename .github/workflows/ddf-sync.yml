@@ -1,0 +1,51 @@
+# Keeps the live listing database (Turso) in step with the REALTOR.ca DDF® feed.
+# Runs every 3 hours and can be started by hand from the Actions tab ("Run workflow").
+# Needs these repository secrets (Settings → Secrets and variables → Actions):
+#   DDF_CLIENT_ID, DDF_CLIENT_SECRET, TURSO_DATABASE_URL, TURSO_AUTH_TOKEN
+name: DDF listing sync
+
+on:
+  schedule:
+    - cron: "17 */3 * * *"
+  workflow_dispatch:
+    inputs:
+      full:
+        description: "Re-fetch every listing (slower)"
+        type: boolean
+        default: false
+
+concurrency:
+  group: ddf-sync
+  cancel-in-progress: false
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      DDF_CLIENT_ID: ${{ secrets.DDF_CLIENT_ID }}
+      DDF_CLIENT_SECRET: ${{ secrets.DDF_CLIENT_SECRET }}
+      TURSO_DATABASE_URL: ${{ secrets.TURSO_DATABASE_URL }}
+      TURSO_AUTH_TOKEN: ${{ secrets.TURSO_AUTH_TOKEN }}
+    steps:
+      # Until the secrets are added, skip instead of failing every run.
+      - name: Check secrets
+        id: secrets
+        run: |
+          if [ -z "$TURSO_DATABASE_URL" ] || [ -z "$DDF_CLIENT_ID" ]; then
+            echo "::warning::Add DDF_CLIENT_ID, DDF_CLIENT_SECRET, TURSO_DATABASE_URL and TURSO_AUTH_TOKEN as repository secrets to enable the sync."
+            echo "ready=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "ready=true" >> "$GITHUB_OUTPUT"
+          fi
+      - if: steps.secrets.outputs.ready == 'true'
+        uses: actions/checkout@v4
+      - if: steps.secrets.outputs.ready == 'true'
+        uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+      - if: steps.secrets.outputs.ready == 'true'
+        run: npm ci --no-audit --no-fund
+      - if: steps.secrets.outputs.ready == 'true'
+        run: npm run ddf:sync -- ${{ inputs.full && '--full' || '' }}

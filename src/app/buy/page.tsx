@@ -35,11 +35,12 @@ const TYPE_ICONS: Record<string, React.ReactNode> = {
 async function buyData() {
   "use cache";
   cacheLife("hours");
-  return {
-    stats: marketStats(),
-    budgets: BUDGETS.map(band => countListings({ minPrice: band.min || undefined, maxPrice: band.max || undefined }) ?? 0),
-    types: TYPE_CHOICES.map(choice => countListings({ type: choice.value }) ?? 0),
-  };
+  const [stats, budgets, types] = await Promise.all([
+    marketStats(),
+    Promise.all(BUDGETS.map(async band => await countListings({ minPrice: band.min || undefined, maxPrice: band.max || undefined }) ?? 0)),
+    Promise.all(TYPE_CHOICES.map(async choice => await countListings({ type: choice.value }) ?? 0)),
+  ]);
+  return { stats, budgets, types };
 }
 
 const count = new Intl.NumberFormat("en-CA");

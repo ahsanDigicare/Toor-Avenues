@@ -4,7 +4,7 @@ import { estimateValue } from "../../../../lib/listings";
 export async function GET(request: Request) {
   const params = new URL(request.url).searchParams;
   const number = (key: string) => { const value = Number(params.get(key)); return Number.isFinite(value) && value > 0 ? value : undefined; };
-  const estimate = estimateValue({
+  const estimate = await estimateValue({
     community: params.get("community")?.slice(0, 80) || undefined,
     city: params.get("city")?.slice(0, 60) || undefined,
     type: params.get("type")?.slice(0, 40) || undefined,

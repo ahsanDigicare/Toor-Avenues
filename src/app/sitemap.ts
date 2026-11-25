@@ -12,7 +12,7 @@ async function entries(): Promise<MetadataRoute.Sitemap> {
   cacheLife("hours");
   return [
     ...PAGES.map(page => ({ url: `${SITE}${page}`, changeFrequency: page === "/search" ? "hourly" as const : "monthly" as const, priority: page ? 0.7 : 1 })),
-    ...sitemapListings().map(listing => ({ url: `${SITE}/listing/${listing.slug}`, lastModified: listing.modifiedAt ?? undefined, changeFrequency: "daily" as const, priority: 0.6 })),
+    ...(await sitemapListings()).map(listing => ({ url: `${SITE}/listing/${listing.slug}`, lastModified: listing.modifiedAt ?? undefined, changeFrequency: "daily" as const, priority: 0.6 })),
   ];
 }
 

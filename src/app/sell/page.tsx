@@ -15,7 +15,8 @@ export const metadata: Metadata = {
 async function sellData() {
   "use cache";
   cacheLife("hours");
-  return { stats: marketStats(), communities: estimateCommunities(), snapshot: communitySnapshot(10) };
+  const [stats, communities, snapshot] = await Promise.all([marketStats(), estimateCommunities(), communitySnapshot(10)]);
+  return { stats, communities, snapshot };
 }
 
 const money = new Intl.NumberFormat("en-CA", { style: "currency", currency: "CAD", maximumFractionDigits: 0 });

@@ -1,11 +1,9 @@
 import "server-only";
 
-import { existsSync } from "node:fs";
-import path from "node:path";
-import { DatabaseSync, type SQLInputValue } from "node:sqlite";
+import { database, type SqlValue } from "./db";
 
 // Read-only access to the DDF® listing database written by scripts/ddf-sync.mjs.
-// Credentials never reach this module; it only reads the synced local copy.
+// Credentials never reach this module; it only reads the synced copy (Turso or the local file, see db.ts).
 
 export type Listing = {
   id: string;
@@ -75,22 +73,6 @@ export type ListingResults = { listings: Listing[]; total: number; page: number;
 export const PAGE_SIZE = 24;
 const NEW_LISTING_DAYS = 7;
 const ACRE_SQFT = 43_560;
-
-let connection: DatabaseSync | null = null;
-
-function database() {
-  if (connection) return connection;
-  const file = path.resolve(/* turbopackIgnore: true */ process.cwd(), process.env.DDF_DB_PATH || ".data/ddf.sqlite");
-  if (!existsSync(file)) return null;
-  try {
-    connection = new DatabaseSync(file, { readOnly: true });
-    connection.exec("PRAGMA busy_timeout = 5000");
-    return connection;
-  } catch (error) {
-    console.error("Unable to open the DDF listing database.", error);
-    return null;
-  }
-}
 
 const money = new Intl.NumberFormat("en-CA", { style: "currency", currency: "CAD", maximumFractionDigits: 0 });
 const count = new Intl.NumberFormat("en-CA");
@@ -215,20 +197,20 @@ const BASE_WHERE = [
   "l.property_sub_type IN ('Single Family', 'Multi-family')",
 ];
 
-export function hasLiveListings() {
-  const db = database();
+export async function hasLiveListings() {
+  const db = await database();
   if (!db) return false;
-  const row = db.prepare(`SELECT 1 AS found FROM listings l WHERE ${BASE_WHERE.join(" AND ")} LIMIT 1`).get();
+  const row = await db.get(`SELECT 1 AS found FROM listings l WHERE ${BASE_WHERE.join(" AND ")} LIMIT 1`);
   return Boolean(row);
 }
 
-export function featuredListings(limit = 3): Listing[] {
-  const db = database();
+export async function featuredListings(limit = 3): Promise<Listing[]> {
+  const db = await database();
   if (!db) return [];
-  const rows = db.prepare(`${SELECT}
+  const rows = await db.all(`${SELECT}
     WHERE ${BASE_WHERE.join(" AND ")} AND l.city = 'Calgary' AND l.display_address = 1
       AND EXISTS (SELECT 1 FROM photos p WHERE p.listing_key = l.listing_key)
-    ORDER BY l.listed_at DESC LIMIT ?`).all(limit) as Row[];
+    ORDER BY l.listed_at DESC LIMIT ?`, limit) as Row[];
   return rows.map(toListing);
 }
 
@@ -291,8 +273,8 @@ const escapeLike = (text: string) => `%${text.replace(/[\\%_]/g, (match) => `\\$
 
 function filterClauses(filters: Omit<ListingFilters, "sort" | "page">) {
   const where = [...BASE_WHERE];
-  const values: SQLInputValue[] = [];
-  const add = (clause: string, ...params: SQLInputValue[]) => { where.push(clause); values.push(...params); };
+  const values: SqlValue[] = [];
+  const add = (clause: string, ...params: SqlValue[]) => { where.push(clause); values.push(...params); };
 
   if (filters.city) add("l.city = ? COLLATE NOCASE", filters.city);
   if (filters.query) {
@@ -339,15 +321,15 @@ function filterClauses(filters: Omit<ListingFilters, "sort" | "page">) {
 export type MapPoint = { id: string; slug: string; lat: number; lng: number; price: number; label: string; address: string; beds: number | null; baths: number | null; photo: string | null };
 
 /** Located listings matching the filters, for the interactive map (capped; newest first). */
-export function mapListings(filters: Omit<ListingFilters, "sort" | "page">, limit = 2500): { points: MapPoint[]; total: number } | null {
-  const db = database();
+export async function mapListings(filters: Omit<ListingFilters, "sort" | "page">, limit = 2500): Promise<{ points: MapPoint[]; total: number } | null> {
+  const db = await database();
   if (!db) return null;
   const { whereSql, values } = filterClauses(filters);
   const located = `${whereSql} AND l.display_address = 1 AND l.latitude IS NOT NULL AND l.longitude IS NOT NULL`;
-  const total = (db.prepare(`SELECT COUNT(*) AS count FROM listings l WHERE ${located}`).get(...values) as { count: number }).count;
-  const rows = db.prepare(`SELECT l.listing_key, l.listing_id, l.address, l.city, l.price, l.latitude, l.longitude, l.bedrooms, l.bathrooms,
+  const total = (await db.get(`SELECT COUNT(*) AS count FROM listings l WHERE ${located}`, ...values) as { count: number }).count;
+  const rows = await db.all(`SELECT l.listing_key, l.listing_id, l.address, l.city, l.price, l.latitude, l.longitude, l.bedrooms, l.bathrooms,
       (SELECT p.url FROM photos p WHERE p.listing_key = l.listing_key ORDER BY p.preferred DESC, p.position LIMIT 1) AS photo
-    FROM listings l WHERE ${located} ORDER BY l.listed_at DESC LIMIT ?`).all(...values, limit) as {
+    FROM listings l WHERE ${located} ORDER BY l.listed_at DESC LIMIT ?`, ...values, limit) as {
       listing_key: string; listing_id: string | null; address: string; city: string | null; price: number; latitude: number; longitude: number;
       bedrooms: number | null; bathrooms: number | null; photo: string | null }[];
   const points = rows.map(row => ({
@@ -360,39 +342,38 @@ export function mapListings(filters: Omit<ListingFilters, "sort" | "page">, limi
 }
 
 /** Number of listings matching the filters (used for the live "Show N homes" count). */
-export function countListings(filters: Omit<ListingFilters, "sort" | "page">): number | null {
-  const db = database();
+export async function countListings(filters: Omit<ListingFilters, "sort" | "page">): Promise<number | null> {
+  const db = await database();
   if (!db) return null;
   const { whereSql, values } = filterClauses(filters);
-  return (db.prepare(`SELECT COUNT(*) AS count FROM listings l WHERE ${whereSql}`).get(...values) as { count: number }).count;
+  return (await db.get(`SELECT COUNT(*) AS count FROM listings l WHERE ${whereSql}`, ...values) as { count: number }).count;
 }
 
 /** Asking prices of every displayable listing, for the price-filter histogram. */
-export function allListingPrices(): number[] {
-  const db = database();
+export async function allListingPrices(): Promise<number[]> {
+  const db = await database();
   if (!db) return [];
-  return (db.prepare(`SELECT l.price FROM listings l WHERE ${BASE_WHERE.join(" AND ")}`).all() as { price: number }[]).map(row => row.price);
+  return (await db.all(`SELECT l.price FROM listings l WHERE ${BASE_WHERE.join(" AND ")}`) as { price: number }[]).map(row => row.price);
 }
 
-export function searchListings(filters: ListingFilters): ListingResults | null {
-  const db = database();
+export async function searchListings(filters: ListingFilters): Promise<ListingResults | null> {
+  const db = await database();
   if (!db) return null;
   const { whereSql, values } = filterClauses(filters);
-  const total = (db.prepare(`SELECT COUNT(*) AS count FROM listings l WHERE ${whereSql}`).get(...values) as { count: number }).count;
+  const total = (await db.get(`SELECT COUNT(*) AS count FROM listings l WHERE ${whereSql}`, ...values) as { count: number }).count;
   const pages = Math.max(1, Math.ceil(total / PAGE_SIZE));
   const page = Math.min(Math.max(1, filters.page), pages);
   const order = filters.sort === "low" ? "l.price ASC" : filters.sort === "high" ? "l.price DESC"
     : filters.sort === "sqft" ? "l.floor_area_sqft IS NULL, l.floor_area_sqft DESC"
     : filters.openHouse ? "open_house_date ASC, l.listed_at DESC" : "l.listed_at DESC";
-  const rows = db.prepare(`${SELECT} WHERE ${whereSql} ORDER BY ${order}, l.listing_key LIMIT ? OFFSET ?`)
-    .all(...values, PAGE_SIZE, (page - 1) * PAGE_SIZE) as Row[];
+  const rows = await db.all(`${SELECT} WHERE ${whereSql} ORDER BY ${order}, l.listing_key LIMIT ? OFFSET ?`, ...values, PAGE_SIZE, (page - 1) * PAGE_SIZE) as Row[];
   return { listings: rows.map(toListing), total, page, pageSize: PAGE_SIZE };
 }
 
-export function listingExists(listingKey: string) {
-  const db = database();
+export async function listingExists(listingKey: string) {
+  const db = await database();
   if (!db) return false;
-  return Boolean(db.prepare("SELECT 1 AS found FROM listings WHERE listing_key = ? AND display_listing = 1").get(listingKey));
+  return Boolean(await db.get("SELECT 1 AS found FROM listings WHERE listing_key = ? AND display_listing = 1", listingKey));
 }
 
 // --- Listing detail -------------------------------------------------------
@@ -419,11 +400,11 @@ export type ListingDetail = Listing & {
 const KEY_PATTERN = /^\d{1,15}$/;
 
 /** Ordered photo URLs for a displayable listing (empty when unknown or hidden). */
-export function listingPhotos(listingKey: string): string[] {
-  const db = database();
+export async function listingPhotos(listingKey: string): Promise<string[]> {
+  const db = await database();
   if (!db || !KEY_PATTERN.test(listingKey)) return [];
-  const rows = db.prepare(`SELECT p.url FROM photos p JOIN listings l ON l.listing_key = p.listing_key
-    WHERE p.listing_key = ? AND l.display_listing = 1 ORDER BY p.position`).all(listingKey) as { url: string }[];
+  const rows = await db.all(`SELECT p.url FROM photos p JOIN listings l ON l.listing_key = p.listing_key
+    WHERE p.listing_key = ? AND l.display_listing = 1 ORDER BY p.position`, listingKey) as { url: string }[];
   return rows.map(row => row.url);
 }
 
@@ -497,23 +478,22 @@ function roomList(raw: Raw): Room[] {
 type DetailRow = Row & { raw: string | null; bathrooms_partial: number | null; postal_code: string | null; year_built: number | null; listed_at: string | null; modified_at: string | null };
 
 /** Full listing by MLS® number, or null when it no longer exists or may not be displayed. */
-export function listingByMls(mls: string): ListingDetail | null {
-  const db = database();
+export async function listingByMls(mls: string): Promise<ListingDetail | null> {
+  const db = await database();
   if (!db || !/^[a-z0-9]{4,20}$/i.test(mls)) return null;
-  const row = db.prepare(`SELECT ${COLUMNS}, l.raw, l.bathrooms_partial, l.postal_code, l.year_built, l.listed_at, l.modified_at ${FROM}
-    WHERE l.listing_id = ? COLLATE NOCASE AND ${BASE_WHERE.join(" AND ")} LIMIT 1`).get(mls) as DetailRow | undefined;
+  const row = await db.get(`SELECT ${COLUMNS}, l.raw, l.bathrooms_partial, l.postal_code, l.year_built, l.listed_at, l.modified_at ${FROM}
+    WHERE l.listing_id = ? COLLATE NOCASE AND ${BASE_WHERE.join(" AND ")} LIMIT 1`, mls) as DetailRow | undefined;
   if (!row) return null;
   const listing = toListing(row);
   let raw: Raw = {};
   try { raw = row.raw ? JSON.parse(row.raw) as Raw : {}; } catch { /* keep empty */ }
   const fee = monthlyFee(raw);
   const showAddress = row.display_address === 1 && Boolean(row.address);
-  const openHouses = (db.prepare(`SELECT date, start_time, end_time FROM open_houses WHERE listing_key = ? AND date >= ${TODAY} ORDER BY date, start_time`)
-    .all(row.listing_key) as { date: string; start_time: string | null; end_time: string | null }[])
+  const openHouses = (await db.all(`SELECT date, start_time, end_time FROM open_houses WHERE listing_key = ? AND date >= ${TODAY} ORDER BY date, start_time`, row.listing_key) as { date: string; start_time: string | null; end_time: string | null }[])
     .map(item => openHouseLabel(item.date, item.start_time, item.end_time));
   return {
     ...listing,
-    photos: listingPhotos(row.listing_key),
+    photos: await listingPhotos(row.listing_key),
     groups: factGroups(raw, listing, row.bathrooms_partial, fee),
     rooms: roomList(raw),
     openHouses,
@@ -530,22 +510,22 @@ export function listingByMls(mls: string): ListingDetail | null {
 }
 
 /** Other homes in the same community (or city) for the listing page. */
-export function similarListings(listing: ListingDetail, limit = 3): Listing[] {
-  const db = database();
+export async function similarListings(listing: ListingDetail, limit = 3): Promise<Listing[]> {
+  const db = await database();
   if (!db) return [];
   const scope = listing.community ? ["l.community = ?", listing.community] as const : listing.city ? ["l.city = ?", listing.city] as const : null;
   if (!scope) return [];
-  const rows = db.prepare(`${SELECT} WHERE ${BASE_WHERE.join(" AND ")} AND ${scope[0]} AND l.listing_key <> ? AND l.display_address = 1
-    ORDER BY ABS(l.price - ?) LIMIT ?`).all(scope[1], listing.id, listing.price, limit) as Row[];
+  const rows = await db.all(`${SELECT} WHERE ${BASE_WHERE.join(" AND ")} AND ${scope[0]} AND l.listing_key <> ? AND l.display_address = 1
+    ORDER BY ABS(l.price - ?) LIMIT ?`, scope[1], listing.id, listing.price, limit) as Row[];
   return rows.map(toListing);
 }
 
 /** Every displayable listing's slug and last change, for the XML sitemap. */
-export function sitemapListings(): { slug: string; modifiedAt: string | null }[] {
-  const db = database();
+export async function sitemapListings(): Promise<{ slug: string; modifiedAt: string | null }[]> {
+  const db = await database();
   if (!db) return [];
-  const rows = db.prepare(`SELECT l.listing_key, l.listing_id, l.address, l.city, l.display_address, l.modified_at FROM listings l
-    WHERE ${BASE_WHERE.join(" AND ")} ORDER BY l.listed_at DESC`).all() as { listing_key: string; listing_id: string | null; address: string | null; city: string | null; display_address: number; modified_at: string | null }[];
+  const rows = await db.all(`SELECT l.listing_key, l.listing_id, l.address, l.city, l.display_address, l.modified_at FROM listings l
+    WHERE ${BASE_WHERE.join(" AND ")} ORDER BY l.listed_at DESC`) as { listing_key: string; listing_id: string | null; address: string | null; city: string | null; display_address: number; modified_at: string | null }[];
   return rows.map(row => ({
     slug: [row.display_address === 1 && row.address ? row.address : "home", row.city ?? "alberta", row.listing_id ?? row.listing_key].map(slugify).filter(Boolean).join("-"),
     modifiedAt: row.modified_at,
@@ -656,10 +636,10 @@ const percentile = (sorted: number[], q: number) => sorted.length ? sorted[Math.
 export type MarketStats = { total: number; fresh: number; medianPrice: number; medianDays: number };
 
 /** Headline numbers: homes for sale, new this week, typical price, typical days on market. */
-export function marketStats(): MarketStats | null {
-  const db = database();
+export async function marketStats(): Promise<MarketStats | null> {
+  const db = await database();
   if (!db) return null;
-  const rows = db.prepare(`SELECT l.price, (julianday('now') - julianday(l.listed_at)) AS days FROM listings l WHERE ${BASE_WHERE.join(" AND ")}`).all() as { price: number; days: number | null }[];
+  const rows = await db.all(`SELECT l.price, (julianday('now') - julianday(l.listed_at)) AS days FROM listings l WHERE ${BASE_WHERE.join(" AND ")}`) as { price: number; days: number | null }[];
   const prices = rows.map(row => row.price).sort((a, b) => a - b);
   const days = rows.map(row => row.days ?? 0).filter(value => value >= 0).sort((a, b) => a - b);
   return { total: rows.length, fresh: days.filter(value => value <= NEW_LISTING_DAYS).length, medianPrice: percentile(prices, 0.5), medianDays: Math.round(percentile(days, 0.5)) };
@@ -668,11 +648,11 @@ export function marketStats(): MarketStats | null {
 export type CommunitySnapshot = { community: string; city: string; count: number; medianPrice: number; medianPpsf: number | null };
 
 /** Busiest communities with their typical asking price and price per square foot. */
-export function communitySnapshot(limit = 10): CommunitySnapshot[] {
-  const db = database();
+export async function communitySnapshot(limit = 10): Promise<CommunitySnapshot[]> {
+  const db = await database();
   if (!db) return [];
-  const rows = db.prepare(`SELECT l.community, l.city, l.price, l.floor_area_sqft AS sqft FROM listings l
-    WHERE ${BASE_WHERE.join(" AND ")} AND l.community IS NOT NULL AND l.community <> ''`).all() as { community: string; city: string; price: number; sqft: number | null }[];
+  const rows = await db.all(`SELECT l.community, l.city, l.price, l.floor_area_sqft AS sqft FROM listings l
+    WHERE ${BASE_WHERE.join(" AND ")} AND l.community IS NOT NULL AND l.community <> ''`) as { community: string; city: string; price: number; sqft: number | null }[];
   const groups = new Map<string, typeof rows>();
   for (const row of rows) { const key = `${row.community}|${row.city}`; const list = groups.get(key); if (list) list.push(row); else groups.set(key, [row]); }
   return [...groups.values()].sort((a, b) => b.length - a.length).slice(0, limit).map(list => {
@@ -683,11 +663,11 @@ export function communitySnapshot(limit = 10): CommunitySnapshot[] {
 }
 
 /** Communities with enough listings to estimate from (for the home value picker). */
-export function estimateCommunities(): { community: string; city: string; count: number }[] {
-  const db = database();
+export async function estimateCommunities(): Promise<{ community: string; city: string; count: number }[]> {
+  const db = await database();
   if (!db) return [];
-  const rows = db.prepare(`SELECT l.community, l.city, COUNT(*) AS count FROM listings l WHERE ${BASE_WHERE.join(" AND ")} AND l.community IS NOT NULL AND l.community <> ''
-    GROUP BY l.community, l.city HAVING COUNT(*) >= 3 ORDER BY l.community`).all() as { community: string; city: string; count: number }[];
+  const rows = await db.all(`SELECT l.community, l.city, COUNT(*) AS count FROM listings l WHERE ${BASE_WHERE.join(" AND ")} AND l.community IS NOT NULL AND l.community <> ''
+    GROUP BY l.community, l.city HAVING COUNT(*) >= 3 ORDER BY l.community`) as { community: string; city: string; count: number }[];
   // SQLite rows have a null prototype; plain objects are needed to pass them to client components.
   return rows.map(row => ({ community: row.community, city: row.city, count: row.count }));
 }
@@ -699,11 +679,11 @@ export type ValueEstimate = { low: number; mid: number; high: number; basis: str
  * where possible, widening to the community, then the city. Uses price per square foot
  * when a size is given, otherwise prices of homes with a similar number of bedrooms.
  */
-export function estimateValue(input: { community?: string; city?: string; type?: string; beds?: number; sqft?: number }): ValueEstimate | null {
-  const db = database();
+export async function estimateValue(input: { community?: string; city?: string; type?: string; beds?: number; sqft?: number }): Promise<ValueEstimate | null> {
+  const db = await database();
   if (!db) return null;
   const type = input.type ? TYPE_FILTERS[slugify(input.type)] : undefined;
-  const scopes: { where: string[]; values: SQLInputValue[]; label: string }[] = [];
+  const scopes: { where: string[]; values: SqlValue[]; label: string }[] = [];
   if (input.community && type) scopes.push({ where: ["l.community = ?", type.clause], values: [input.community], label: `${type.label.toLowerCase()} listings in ${input.community}` });
   if (input.community) scopes.push({ where: ["l.community = ?"], values: [input.community], label: `listings in ${input.community}` });
   const city = input.city || "Calgary";
@@ -712,8 +692,8 @@ export function estimateValue(input: { community?: string; city?: string; type?:
 
   type CompRow = { listing_key: string; price: number; sqft: number | null; beds: number | null };
   for (const scope of scopes) {
-    let rows = db.prepare(`SELECT l.listing_key, l.price, l.floor_area_sqft AS sqft, l.bedrooms AS beds FROM listings l
-      WHERE ${[...BASE_WHERE, ...scope.where].join(" AND ")}`).all(...scope.values) as CompRow[];
+    let rows = await db.all(`SELECT l.listing_key, l.price, l.floor_area_sqft AS sqft, l.bedrooms AS beds FROM listings l
+      WHERE ${[...BASE_WHERE, ...scope.where].join(" AND ")}`, ...scope.values) as CompRow[];
     if (input.beds) {
       const similar = rows.filter(row => row.beds !== null && Math.abs(row.beds - input.beds!) <= 1);
       if (similar.length >= 4) rows = similar;
@@ -735,7 +715,7 @@ export function estimateValue(input: { community?: string; city?: string; type?:
       pick = row => Math.abs(row.price - mid);
     }
     const keys = [...rows].sort((a, b) => pick(a) - pick(b)).slice(0, 3).map(row => row.listing_key);
-    const comparables = keys.length ? (db.prepare(`${SELECT} WHERE l.listing_key IN (${keys.map(() => "?").join(",")})`).all(...keys) as Row[]).map(toListing) : [];
+    const comparables = keys.length ? (await db.all(`${SELECT} WHERE l.listing_key IN (${keys.map(() => "?").join(",")})`, ...keys) as Row[]).map(toListing) : [];
     const round = (value: number) => Math.round(value / 5000) * 5000;
     return { low: round(low), mid: round(mid), high: round(high), basis: scope.label, sample, comparables };
   }

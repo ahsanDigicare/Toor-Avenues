@@ -7,10 +7,12 @@
     "build": "next build",
     "start": "next start",
     "lint": "eslint",
-    "ddf:photos": "node --env-file=.env.local scripts/ddf-photos.mjs",
-    "ddf:sync": "node --env-file=.env.local scripts/ddf-sync.mjs"
+    "ddf:photos": "node --env-file-if-exists=.env.local scripts/ddf-photos.mjs",
+    "ddf:sync": "node --env-file-if-exists=.env.local scripts/ddf-sync.mjs",
+    "db:upload": "node --env-file-if-exists=.env.local scripts/db-upload.mjs"
   },
   "dependencies": {
+    "@libsql/client": "^0.18.0",
     "leaflet": "^1.9.4",
     "next": "16.4.6",
     "react": "19.3.0",

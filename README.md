@@ -55,7 +55,7 @@ The photo export is a one-off diagnostic. The website does not use it; it uses t
 
 ## Live DDF listings
 
-The destination feed is a **National Shared Pool** feed (destination ID 68103). The site shows a Calgary-area subset of it from a local SQLite database built with Node's built-in `node:sqlite`, so no native packages are needed. Node.js 24 is required.
+The destination feed is a **National Shared Pool** feed (destination ID 68103). The site shows a Calgary-area subset of it from a SQLite database: [Turso](https://turso.tech) (hosted SQLite) in production when `TURSO_DATABASE_URL` is set, otherwise a local file read with Node's built-in `node:sqlite`. Both use the same SQL (`src/lib/db.ts` for the site, `scripts/db.mjs` for the scripts). Node.js 24 is required.
 
 ```powershell
 npm run ddf:sync            # incremental sync (about 45 seconds)
@@ -77,12 +77,20 @@ Settings in `.env.local`:
 | `DDF_CLIENT_ID`, `DDF_CLIENT_SECRET` | none | Feed credentials. Server-side only; never prefix them with `NEXT_PUBLIC_`. |
 | `DDF_CITIES` | `Calgary,Airdrie,Cochrane,Chestermere,Okotoks` | Cities to sync. |
 | `DDF_PROVINCE` | `Alberta` | Keeps out cities with the same name elsewhere, such as Cochrane, ON. |
-| `DDF_DB_PATH` | `.data/ddf.sqlite` | Database location, read by both the sync and the website. |
+| `TURSO_DATABASE_URL`, `TURSO_AUTH_TOKEN` | none | Use Turso instead of the local file (both the sync and the website). |
+| `DDF_DB_PATH` | `.data/ddf.sqlite` | Local database location, used when Turso is not set. |
 | `DDF_DESTINATION_ID` | none | Turns on CREA analytics "View" events (`/api/ddf/analytics`). |
 
-**Scheduling.** Run the sync at least hourly. CREA requires the master-list check at least daily, with removals made promptly. On Linux, a cron entry works: `0 * * * * cd /path/to/site && npm run ddf:sync`. On Windows, use Task Scheduler. The homepage revalidates every minute, and search results are read on every request.
+**Hosting on Vercel (free plans).** Vercel's filesystem is read-only and the database is too large for Git, so production uses Turso:
 
-**Hosting.** The database is a local file. Host the site on a server with a persistent disk (a VPS, Render or Railway with a volume, or similar) and run the sync on the same machine. On serverless hosting such as Vercel, move the tables in `scripts/ddf-sync.mjs` and the queries in `src/lib/listings.ts` to a hosted database such as Postgres.
+1. Create a Turso database and an auth token (dashboard at turso.tech, or `turso db create toor-avenues` and `turso db tokens create toor-avenues`).
+2. Add `TURSO_DATABASE_URL` and `TURSO_AUTH_TOKEN` to `.env.local`, then run `npm run db:upload` once. It copies `.data/ddf.sqlite` into Turso (about a minute) and is safe to re-run.
+3. In Vercel → Project → Settings → Environment Variables, add `TURSO_DATABASE_URL`, `TURSO_AUTH_TOKEN` and `SITE_URL`, then redeploy. The DDF credentials are not needed on Vercel.
+4. In GitHub → Settings → Secrets and variables → Actions, add `DDF_CLIENT_ID`, `DDF_CLIENT_SECRET`, `TURSO_DATABASE_URL` and `TURSO_AUTH_TOKEN`. The workflow `.github/workflows/ddf-sync.yml` then syncs every 3 hours (CREA requires at least daily), and can be run by hand from the Actions tab.
+
+With Turso set in `.env.local`, `npm run dev` and `npm run ddf:sync` also use Turso; remove the two variables to go back to the local file. The sync only rewrites a listing's photos when they changed, which keeps writes well inside Turso's free allowance.
+
+**Scheduling elsewhere.** On a server with a persistent disk (a VPS, or similar), the local file works without Turso: schedule `npm run ddf:sync` with cron (`0 * * * * cd /path/to/site && npm run ddf:sync`) or Windows Task Scheduler. The homepage revalidates every minute, and search results are read on every request.
 
 The website behaviour:
 - When no database exists, the homepage and `/search` fall back to the illustrative sample cards.
@@ -105,5 +113,5 @@ The DDF Web API documentation covers syncing and analytics but not display rules
 - [ ] Linking to the REALTOR.ca listing page (`ListingURL`) from the detail view is acceptable as implemented.
 - [ ] Resizing and caching photos through `next/image` is allowed. If not, add `unoptimized` to the listing `<Image>` elements so photos are served directly from the CREA CDN.
 - [ ] Whether CREA analytics events are expected. They are enabled with `DDF_DESTINATION_ID`. The privacy policy should mention the analytics cookie and CREA analytics.
-- [ ] The sync is scheduled on the production host, and the client accepts the removal timing.
+- [ ] The GitHub Actions sync is running (Actions tab shows green runs), and the client accepts the removal timing (up to 3 hours, plus up to 1 hour of page caching).
 - [ ] The "Open houses only" filter is disabled because `OpenHouse` data is not synced yet.

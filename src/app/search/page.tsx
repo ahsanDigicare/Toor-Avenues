@@ -29,7 +29,7 @@ async function priceHistogram() {
   "use cache";
   cacheLife("hours");
   const bins = PRICE_STEPS.map(() => 0);
-  for (const price of allListingPrices()) {
+  for (const price of await allListingPrices()) {
     const next = PRICE_STEPS.findIndex(step => step > price);
     bins[next < 0 ? PRICE_STEPS.length - 1 : Math.max(0, next - 1)]++;
   }
@@ -68,14 +68,14 @@ async function SearchForm({ searchParams }: { searchParams: SearchParams }) {
   if (filters.zone && city === null) hidden.zone = filters.zone;
   if (filters.maxBeds) hidden.maxBeds = String(filters.maxBeds);
   if (filters.bounds) hidden.bounds = filters.bounds.join(",");
-  const [bins, total] = [await priceHistogram(), countListings(filters)];
+  const [bins, total] = await Promise.all([priceHistogram(), countListings(filters)]);
   return <ListingFilter key={JSON.stringify([initial, hidden])} initial={initial} hidden={hidden} priceBins={bins} initialTotal={total} initialPanel={value(params, "more") === "1" ? "more" : null} />;
 }
 
 async function Results({ searchParams }: { searchParams: SearchParams }) {
   const params = await searchParams;
   const filters = parseListingFilters(params);
-  const results = searchListings(filters);
+  const results = await searchListings(filters);
   if (!results) return <PropertyExplorer initialView={value(params, "view") === "map" ? "map" : "list"} />;
   const query = new URLSearchParams(FILTER_FIELDS.map(key => [key, value(params, key)] as [string, string]).filter(([, v]) => v)).toString();
   return <>
@@ -87,7 +87,7 @@ async function Results({ searchParams }: { searchParams: SearchParams }) {
 async function IntroCopy() {
   "use cache";
   cacheLife("hours");
-  return hasLiveListings()
+  return await hasLiveListings()
     ? <><h2>Explore Calgary real estate.</h2><span>Current MLS® System listings across Calgary and surrounding communities, updated regularly from the REALTOR.ca DDF®.</span></>
     : <><h2>Start exploring Calgary real estate.</h2><span>These examples preview the search experience. Live IDX data will replace them before launch.</span></>;
 }

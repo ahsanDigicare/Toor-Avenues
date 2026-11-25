@@ -14,7 +14,7 @@ export async function POST(request: Request) {
 
   const body = await request.json().catch(() => null) as { listingKey?: unknown } | null;
   const listingKey = typeof body?.listingKey === "string" ? body.listingKey : "";
-  if (!/^\d{1,15}$/.test(listingKey) || !listingExists(listingKey)) return new Response(null, { status: 400 });
+  if (!/^\d{1,15}$/.test(listingKey) || !(await listingExists(listingKey))) return new Response(null, { status: 400 });
 
   const cookieStore = await cookies();
   let visitor = cookieStore.get(VISITOR_COOKIE)?.value ?? "";

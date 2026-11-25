@@ -1,5 +1,6 @@
 // Synchronizes the Calgary-area subset of the REALTOR.ca DDF® feed into a local
-// SQLite database (.data/ddf.sqlite by default) that the website reads.
+// SQLite database that the website reads: Turso when TURSO_DATABASE_URL is set
+// (the live site on Vercel), otherwise the local file .data/ddf.sqlite.
 //
 // Each run:
 //   1. Builds the area's master list (ListingKey + timestamps) with key-based
@@ -14,19 +15,16 @@
 //   npm run ddf:sync -- --full               re-fetch details for every listing
 //   npm run ddf:sync -- --allow-large-removal  bypass the mass-deletion guard
 //
-// Environment (in .env.local): DDF_CLIENT_ID, DDF_CLIENT_SECRET, and optionally
-// DDF_CITIES (comma-separated), DDF_PROVINCE, DDF_DB_PATH.
+// Environment (in .env.local, or GitHub Actions secrets): DDF_CLIENT_ID, DDF_CLIENT_SECRET,
+// optionally TURSO_DATABASE_URL + TURSO_AUTH_TOKEN, DDF_CITIES (comma-separated), DDF_PROVINCE, DDF_DB_PATH.
 
-import { mkdir } from "node:fs/promises";
-import path from "node:path";
-import { DatabaseSync } from "node:sqlite";
+import { openDatabase, sql } from "./db.mjs";
 
 const apiBase = new URL("https://ddfapi.realtor.ca/odata/v1/");
 const clientId = process.env.DDF_CLIENT_ID;
 const clientSecret = process.env.DDF_CLIENT_SECRET;
 const cities = (process.env.DDF_CITIES || "Calgary,Airdrie,Cochrane,Chestermere,Okotoks").split(",").map((city) => city.trim()).filter(Boolean);
 const province = process.env.DDF_PROVINCE || "Alberta";
-const databasePath = path.resolve(process.env.DDF_DB_PATH || ".data/ddf.sqlite");
 const args = new Set(process.argv.slice(2));
 const fullRefresh = args.has("--full");
 const allowLargeRemoval = args.has("--allow-large-removal");
@@ -37,6 +35,8 @@ const OPEN_HOUSE_REFRESH_HOURS = 3;
 
 if (!clientId || !clientSecret) throw new Error("DDF_CLIENT_ID and DDF_CLIENT_SECRET are required in .env.local.");
 if (!cities.length) throw new Error("DDF_CITIES must list at least one city.");
+// On GitHub Actions a local file would be thrown away after the run.
+if (process.env.CI && !process.env.TURSO_DATABASE_URL) throw new Error("TURSO_DATABASE_URL and TURSO_AUTH_TOKEN secrets are required when running in CI.");
 
 // ---------------------------------------------------------------------------
 // DDF client
@@ -142,7 +142,7 @@ async function fetchDetails(keys, onBatch) {
         "$filter": `ListingKey in (${batch.map(quote).join(",")})`,
         "$top": "100",
       }));
-      onBatch(page.value);
+      await onBatch(page.value);
       done += batch.length;
       if (done % 1000 < DETAIL_BATCH || done === keys.length) console.log(`Fetched details for ${done} of ${keys.length} listings.`);
     }
@@ -184,99 +184,6 @@ async function fetchUpcomingOpenHouses(fromDate) {
     if (openHouses.length > 100_000) throw new Error("Open-house list is unexpectedly large.");
   }
   return openHouses;
-}
-
-// ---------------------------------------------------------------------------
-// Database
-// ---------------------------------------------------------------------------
-
-function openDatabase() {
-  const db = new DatabaseSync(databasePath);
-  db.exec(`
-    PRAGMA journal_mode = WAL;
-    PRAGMA foreign_keys = ON;
-    PRAGMA busy_timeout = 5000;
-    CREATE TABLE IF NOT EXISTS listings (
-      listing_key TEXT PRIMARY KEY,
-      listing_id TEXT,
-      modified_at TEXT,
-      photos_changed_at TEXT,
-      listed_at TEXT,
-      status TEXT,
-      price REAL,
-      lease_amount REAL,
-      lease_frequency TEXT,
-      address TEXT,
-      unit_number TEXT,
-      city TEXT,
-      province TEXT,
-      postal_code TEXT,
-      community TEXT,
-      latitude REAL,
-      longitude REAL,
-      bedrooms INTEGER,
-      bathrooms INTEGER,
-      bathrooms_partial INTEGER,
-      floor_area_sqft REAL,
-      property_sub_type TEXT,
-      structure_type TEXT,
-      year_built INTEGER,
-      remarks TEXT,
-      listing_url TEXT,
-      list_office_key TEXT,
-      list_agent_key TEXT,
-      display_address INTEGER NOT NULL DEFAULT 1,
-      display_listing INTEGER NOT NULL DEFAULT 1,
-      originating_system TEXT,
-      photos_count INTEGER,
-      raw TEXT,
-      synced_at TEXT NOT NULL
-    );
-    CREATE INDEX IF NOT EXISTS listings_city_price ON listings (city, price);
-    CREATE INDEX IF NOT EXISTS listings_price ON listings (price);
-    CREATE INDEX IF NOT EXISTS listings_listed_at ON listings (listed_at);
-    CREATE INDEX IF NOT EXISTS listings_listing_id ON listings (listing_id COLLATE NOCASE);
-    CREATE TABLE IF NOT EXISTS open_houses (
-      open_house_key TEXT PRIMARY KEY,
-      listing_key TEXT NOT NULL REFERENCES listings (listing_key) ON DELETE CASCADE,
-      date TEXT NOT NULL,
-      start_time TEXT,
-      end_time TEXT,
-      type TEXT,
-      remarks TEXT,
-      livestream_url TEXT
-    );
-    CREATE INDEX IF NOT EXISTS open_houses_listing ON open_houses (listing_key, date);
-    CREATE TABLE IF NOT EXISTS photos (
-      listing_key TEXT NOT NULL REFERENCES listings (listing_key) ON DELETE CASCADE,
-      position INTEGER NOT NULL,
-      url TEXT NOT NULL,
-      preferred INTEGER NOT NULL DEFAULT 0,
-      PRIMARY KEY (listing_key, position)
-    );
-    CREATE TABLE IF NOT EXISTS offices (
-      office_key TEXT PRIMARY KEY,
-      name TEXT,
-      phone TEXT,
-      city TEXT,
-      modified_at TEXT,
-      synced_at TEXT NOT NULL
-    );
-    CREATE TABLE IF NOT EXISTS sync_state (key TEXT PRIMARY KEY, value TEXT);
-  `);
-  return db;
-}
-
-function transaction(db, work) {
-  db.exec("BEGIN IMMEDIATE");
-  try {
-    const result = work();
-    db.exec("COMMIT");
-    return result;
-  } catch (error) {
-    db.exec("ROLLBACK");
-    throw error;
-  }
 }
 
 const SQFT_PER_SQM = 10.7639;
@@ -353,14 +260,14 @@ function propertyPhotos(property) {
 
 async function main() {
   const startedAt = new Date().toISOString();
-  await mkdir(path.dirname(databasePath), { recursive: true });
-  const db = openDatabase();
+  const db = await openDatabase();
+  console.log(`Database: ${db.label}`);
 
   console.log(`Building master list for ${cities.join(", ")} (${province}).`);
   const master = await fetchMasterList();
   console.log(`Master list contains ${master.size} listings.`);
 
-  const stored = new Map(db.prepare("SELECT listing_key, modified_at, photos_changed_at FROM listings").all()
+  const stored = new Map((await db.all("SELECT listing_key, modified_at, photos_changed_at FROM listings"))
     .map((row) => [row.listing_key, row]));
   const changed = [...master].filter(([key, remote]) => {
     const local = stored.get(key);
@@ -374,7 +281,7 @@ async function main() {
     throw new Error(`Refusing to remove ${removed.length} of ${stored.size} listings. Re-run with --allow-large-removal if this is expected.`);
   }
 
-  const upsert = db.prepare(`
+  const UPSERT = `
     INSERT INTO listings (listing_key, listing_id, modified_at, photos_changed_at, listed_at, status, price, lease_amount, lease_frequency,
       address, unit_number, city, province, postal_code, community, latitude, longitude, bedrooms, bathrooms, bathrooms_partial,
       floor_area_sqft, property_sub_type, structure_type, year_built, remarks, listing_url, list_office_key, list_agent_key,
@@ -391,90 +298,97 @@ async function main() {
       remarks = excluded.remarks, listing_url = excluded.listing_url, list_office_key = excluded.list_office_key,
       list_agent_key = excluded.list_agent_key, display_address = excluded.display_address,
       display_listing = excluded.display_listing, originating_system = excluded.originating_system,
-      photos_count = excluded.photos_count, raw = excluded.raw, synced_at = excluded.synced_at`);
-  const clearPhotos = db.prepare("DELETE FROM photos WHERE listing_key = ?");
-  const insertPhoto = db.prepare("INSERT INTO photos (listing_key, position, url, preferred) VALUES (?, ?, ?, ?)");
+      photos_count = excluded.photos_count, raw = excluded.raw, synced_at = excluded.synced_at`;
 
   let upserted = 0;
   let photoCount = 0;
-  await fetchDetails(changed, (properties) => transaction(db, () => {
+  // Each detail batch (up to 50 listings and their photos) is written in one transaction.
+  await fetchDetails(changed, async (properties) => {
     const syncedAt = new Date().toISOString();
+    const statements = [];
     for (const property of properties) {
       // Only store what is still in this run's master list for the area.
       if (!property.ListingKey || !master.has(String(property.ListingKey))) continue;
-      upsert.run(...listingRow(property, syncedAt));
-      clearPhotos.run(String(property.ListingKey));
-      propertyPhotos(property).forEach((media, position) => {
-        insertPhoto.run(String(property.ListingKey), position, media.MediaURL, media.PreferredPhotoYN === true ? 1 : 0);
-        photoCount++;
-      });
+      const key = String(property.ListingKey);
+      statements.push(sql(UPSERT, ...listingRow(property, syncedAt)));
+      // Most changes are price or text edits; rewrite photos only when they changed (saves
+      // ~35 row writes per listing, which matters on Turso's monthly write allowance).
+      const before = stored.get(key);
+      const photosChanged = fullRefresh || !before || before.photos_changed_at !== nullable(property.PhotosChangeTimestamp);
+      if (photosChanged) {
+        statements.push(sql("DELETE FROM photos WHERE listing_key = ?", key));
+        propertyPhotos(property).forEach((media, position) => {
+          statements.push(sql("INSERT INTO photos (listing_key, position, url, preferred) VALUES (?, ?, ?, ?)", key, position, media.MediaURL, media.PreferredPhotoYN === true ? 1 : 0));
+          photoCount++;
+        });
+      }
       upserted++;
     }
-  }));
+    await db.batch(statements);
+  });
 
-  const remove = db.prepare("DELETE FROM listings WHERE listing_key = ?");
-  transaction(db, () => { for (const key of removed) remove.run(key); });
+  // Child rows are deleted explicitly rather than relying on ON DELETE CASCADE,
+  // which needs foreign keys switched on (not guaranteed on Turso).
+  for (let i = 0; i < removed.length; i += 100) {
+    await db.batch(removed.slice(i, i + 100).flatMap((key) => [
+      sql("DELETE FROM photos WHERE listing_key = ?", key),
+      sql("DELETE FROM open_houses WHERE listing_key = ?", key),
+      sql("DELETE FROM listings WHERE listing_key = ?", key),
+    ]));
+  }
 
   // Brokerage (office) records for attribution.
   const refreshBefore = new Date(Date.now() - OFFICE_REFRESH_DAYS * 86_400_000).toISOString();
-  const officeKeys = db.prepare(`
+  const officeKeys = (await db.all(`
     SELECT DISTINCT l.list_office_key AS key FROM listings l
     LEFT JOIN offices o ON o.office_key = l.list_office_key
-    WHERE l.list_office_key IS NOT NULL AND (o.office_key IS NULL OR o.synced_at < ?)`).all(refreshBefore).map((row) => row.key);
+    WHERE l.list_office_key IS NOT NULL AND (o.office_key IS NULL OR o.synced_at < ?)`, refreshBefore)).map((row) => row.key);
   if (officeKeys.length) {
     const offices = await fetchOffices(officeKeys);
-    const upsertOffice = db.prepare(`
+    const syncedAt = new Date().toISOString();
+    await db.batch(offices.map((office) => sql(`
       INSERT INTO offices (office_key, name, phone, city, modified_at, synced_at) VALUES (?, ?, ?, ?, ?, ?)
       ON CONFLICT (office_key) DO UPDATE SET name = excluded.name, phone = excluded.phone, city = excluded.city,
-        modified_at = excluded.modified_at, synced_at = excluded.synced_at`);
-    const syncedAt = new Date().toISOString();
-    transaction(db, () => {
-      for (const office of offices) {
-        upsertOffice.run(String(office.OfficeKey), nullable(office.OfficeName?.trim()), nullable(office.OfficePhone), nullable(office.OfficeCity), nullable(office.ModificationTimestamp), syncedAt);
-      }
-    });
+        modified_at = excluded.modified_at, synced_at = excluded.synced_at`,
+      String(office.OfficeKey), nullable(office.OfficeName?.trim()), nullable(office.OfficePhone), nullable(office.OfficeCity), nullable(office.ModificationTimestamp), syncedAt)));
   }
+
   // Open houses: refreshed every few hours (about 100 requests), replacing the stored set.
-  const getState = db.prepare("SELECT value FROM sync_state WHERE key = ?");
-  const lastOpenHouseSync = Date.parse(getState.get("open_houses_synced_at")?.value ?? "") || 0;
-  let openHouseCount = null;
+  const lastOpenHouseSync = Date.parse((await db.get("SELECT value FROM sync_state WHERE key = ?", "open_houses_synced_at"))?.value ?? "") || 0;
   if (fullRefresh || Date.now() - lastOpenHouseSync > OPEN_HOUSE_REFRESH_HOURS * 3_600_000) {
     const fromDate = new Date(Date.now() - 86_400_000).toISOString().slice(0, 10);
     const openHouses = await fetchUpcomingOpenHouses(fromDate);
-    const insertOpenHouse = db.prepare(`
-      INSERT OR REPLACE INTO open_houses (open_house_key, listing_key, date, start_time, end_time, type, remarks, livestream_url)
-      SELECT ?, ?, ?, ?, ?, ?, ?, ? WHERE EXISTS (SELECT 1 FROM listings WHERE listing_key = ?)`);
-    openHouseCount = transaction(db, () => {
-      db.exec("DELETE FROM open_houses");
-      let kept = 0;
-      for (const openHouse of openHouses) {
-        if (!openHouse.OpenHouseKey || !openHouse.ListingKey || !openHouse.OpenHouseDate) continue;
-        if (openHouse.OpenHouseStatus && openHouse.OpenHouseStatus !== "Active") continue;
-        const key = String(openHouse.ListingKey);
-        kept += Number(insertOpenHouse.run(String(openHouse.OpenHouseKey), key, String(openHouse.OpenHouseDate).slice(0, 10),
-          nullable(openHouse.OpenHouseStartTime), nullable(openHouse.OpenHouseEndTime), nullable(openHouse.OpenHouseType),
-          nullable(openHouse.OpenHouseRemarks?.trim()), nullable(openHouse.LivestreamOpenHouseURL), key).changes);
-      }
-      db.prepare("INSERT INTO sync_state (key, value) VALUES ('open_houses_synced_at', ?) ON CONFLICT (key) DO UPDATE SET value = excluded.value").run(new Date().toISOString());
-      return kept;
-    });
-    console.log(`Open houses: ${openHouseCount} upcoming in the area (of ${openHouses.length} nationwide).`);
+    const statements = [sql("DELETE FROM open_houses")];
+    for (const openHouse of openHouses) {
+      if (!openHouse.OpenHouseKey || !openHouse.ListingKey || !openHouse.OpenHouseDate) continue;
+      if (openHouse.OpenHouseStatus && openHouse.OpenHouseStatus !== "Active") continue;
+      const key = String(openHouse.ListingKey);
+      statements.push(sql(`
+        INSERT OR REPLACE INTO open_houses (open_house_key, listing_key, date, start_time, end_time, type, remarks, livestream_url)
+        SELECT ?, ?, ?, ?, ?, ?, ?, ? WHERE EXISTS (SELECT 1 FROM listings WHERE listing_key = ?)`,
+        String(openHouse.OpenHouseKey), key, String(openHouse.OpenHouseDate).slice(0, 10),
+        nullable(openHouse.OpenHouseStartTime), nullable(openHouse.OpenHouseEndTime), nullable(openHouse.OpenHouseType),
+        nullable(openHouse.OpenHouseRemarks?.trim()), nullable(openHouse.LivestreamOpenHouseURL), key));
+    }
+    statements.push(sql("INSERT INTO sync_state (key, value) VALUES ('open_houses_synced_at', ?) ON CONFLICT (key) DO UPDATE SET value = excluded.value", new Date().toISOString()));
+    const changes = await db.batch(statements);
+    const kept = changes.slice(1, -1).reduce((sum, n) => sum + n, 0);
+    console.log(`Open houses: ${kept} upcoming in the area (of ${openHouses.length} nationwide).`);
   }
 
-  const officesRemoved = db.prepare("DELETE FROM offices WHERE office_key NOT IN (SELECT list_office_key FROM listings WHERE list_office_key IS NOT NULL)").run().changes;
+  const [officesRemoved] = await db.batch([sql("DELETE FROM offices WHERE office_key NOT IN (SELECT list_office_key FROM listings WHERE list_office_key IS NOT NULL)")]);
 
-  const setState = db.prepare("INSERT INTO sync_state (key, value) VALUES (?, ?) ON CONFLICT (key) DO UPDATE SET value = excluded.value");
-  const total = db.prepare("SELECT COUNT(*) AS count FROM listings").get().count;
-  transaction(db, () => {
-    setState.run("last_success_started_at", startedAt);
-    setState.run("last_success_finished_at", new Date().toISOString());
-    setState.run("area", JSON.stringify({ cities, province }));
-    setState.run("listing_count", String(total));
-  });
-  db.exec("PRAGMA wal_checkpoint(TRUNCATE)");
+  const total = (await db.get("SELECT COUNT(*) AS count FROM listings")).count;
+  const setState = (key, value) => sql("INSERT INTO sync_state (key, value) VALUES (?, ?) ON CONFLICT (key) DO UPDATE SET value = excluded.value", key, value);
+  await db.batch([
+    setState("last_success_started_at", startedAt),
+    setState("last_success_finished_at", new Date().toISOString()),
+    setState("area", JSON.stringify({ cities, province })),
+    setState("listing_count", String(total)),
+  ]);
   db.close();
 
-  console.log(`Sync complete: ${upserted} listings updated (${photoCount} photos), ${removed.length} removed, ${officeKeys.length} offices refreshed, ${officesRemoved} unused offices removed. ${total} listings stored in ${path.relative(process.cwd(), databasePath)}.`);
+  console.log(`Sync complete: ${upserted} listings updated (${photoCount} photos), ${removed.length} removed, ${officeKeys.length} offices refreshed, ${officesRemoved} unused offices removed. ${total} listings stored in ${db.label}.`);
 }
 
 main().catch((error) => {

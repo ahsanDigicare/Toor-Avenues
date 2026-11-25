@@ -158,11 +158,10 @@ function Header() {
 async function heroStats() {
   "use cache";
   cacheLife("hours");
-  const total = countListings({}) ?? 0;
-  const fresh = countListings({ newOnly: true }) ?? 0;
-  const prices = allListingPrices().sort((a, b) => a - b);
+  const [total, fresh, prices] = await Promise.all([countListings({}), countListings({ newOnly: true }), allListingPrices()]);
+  prices.sort((a, b) => a - b);
   const typical = prices.length ? prices[Math.floor(prices.length / 2)] : 0;
-  return { total, fresh, typical };
+  return { total: total ?? 0, fresh: fresh ?? 0, typical };
 }
 
 const HERO_SLIDES = [
@@ -222,7 +221,7 @@ async function Hero() {
 async function FeaturedHomes() {
   "use cache";
   cacheLife("minutes");
-  const live = featuredListings(3);
+  const live = await featuredListings(3);
 
   if (!live.length) {
     return (

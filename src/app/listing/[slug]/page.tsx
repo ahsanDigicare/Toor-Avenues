@@ -20,8 +20,8 @@ async function getListing(slug: string) {
   cacheLife("minutes");
   const mls = mlsFromSlug(slug);
   if (!mls) return null;
-  const listing = listingByMls(mls);
-  return listing ? { listing, similar: similarListings(listing, 8) } : null;
+  const listing = await listingByMls(mls);
+  return listing ? { listing, similar: await similarListings(listing, 8) } : null;
 }
 
 /** Monthly mortgage payment with the calculator's defaults: 20% down, 4.5%, 25 years, Canadian semi-annual compounding. */
