@@ -55,42 +55,51 @@ The photo export is a one-off diagnostic. The website does not use it; it uses t
 
 ## Live DDF listings
 
-The destination feed is a **National Shared Pool** feed (destination ID 68103). The site shows a Calgary-area subset of it from a SQLite database: [Turso](https://turso.tech) (hosted SQLite) in production when `TURSO_DATABASE_URL` is set, otherwise a local file read with Node's built-in `node:sqlite`. Both use the same SQL (`src/lib/db.ts` for the site, `scripts/db.mjs` for the scripts). Node.js 24 is required.
+The destination feed is a **National Shared Pool** feed (destination ID 68103). The site shows every residential home for sale on it, across Canada (about 153,000 listings: Ontario, BC, Alberta, Saskatchewan and the Atlantic provinces; Quebec and Manitoba are not on this feed). Listings are stored in a SQLite database: [Turso](https://turso.tech) (hosted SQLite) in production when `TURSO_DATABASE_URL` is set, otherwise a local file read with Node's built-in `node:sqlite`. Both use the same SQL (`src/lib/db.ts` for the site, `scripts/db.mjs` for the scripts). Node.js 24 is required.
 
 ```powershell
-npm run ddf:sync            # incremental sync (about 45 seconds)
-npm run ddf:sync -- --full  # re-fetch every listing's details (about 2 minutes)
+npm run ddf:sync                  # incremental (a full check when one is due)
+npm run ddf:sync -- --master      # force a full check (removals) now
+npm run ddf:sync -- --full        # full check and re-fetch every listing
+npm run ddf:sync -- --local       # update .data/ddf.sqlite even when Turso is configured
 ```
 
-Each run:
-1. builds the area's master list (listing keys and timestamps) with key-based paging, which avoids the 10,000-listing `$skip` limit;
-2. fetches full details, including `Media` photos with category "Property Photo", only for new or changed listings, 50 per request;
-3. deletes listings that are no longer in the master list (sold, expired, withdrawn or no longer approved), along with their photos;
-4. refreshes the listing brokerages (`Office`) used for attribution.
+There are two kinds of run:
+1. **Full check** (the first run, then at least once a day, as CREA requires): builds the master list (listing keys and timestamps) province by province in parallel, with key-based paging that avoids the 10,000-listing `$skip` limit (about 5 minutes nationally). It fetches every new or changed listing, 50 per request with 6 in parallel, and deletes listings that left the feed (sold, expired, withdrawn or no longer approved). The first national load takes about 30–45 minutes.
+2. **Changes only** (every run in between): asks DDF for listings modified since the previous run (a few thousand every 3 hours) and updates just those, in a minute or two.
 
-If the master list looks incomplete, nothing is deleted. A run that would remove more than 30% of stored listings stops unless you pass `--allow-large-removal`.
+Every run also refreshes brokerages (`Office`) and upcoming open houses (only the differences are written). It then recomputes the **market summary**: totals, typical prices, the price distribution, provinces, cities and home-type counts, stored as one JSON row in `sync_state` (`scripts/market.mjs`). The homepage, Buy, Sell and search pages read that one row instead of scanning every listing. To recompute it on its own, run `node --env-file-if-exists=.env.local scripts/market.mjs [--local]`.
+
+What is stored per listing is kept small for a national database (about 6.5 KB each, about 1 GB in total). Only the record fields the site uses go in `raw`, and the photo URLs are one JSON array per listing (`photos`, plus the cover `photo`), not a row per photo. Older databases are migrated automatically on the next sync.
+
+If a full check's master list looks incomplete, nothing is deleted. A run that would remove more than 30% of stored listings stops unless you pass `--allow-large-removal`.
 
 Settings in `.env.local`:
 
 | Variable | Default | Purpose |
 | --- | --- | --- |
 | `DDF_CLIENT_ID`, `DDF_CLIENT_SECRET` | none | Feed credentials. Server-side only; never prefix them with `NEXT_PUBLIC_`. |
-| `DDF_CITIES` | `Calgary,Airdrie,Cochrane,Chestermere,Okotoks` | Cities to sync. |
-| `DDF_PROVINCE` | `Alberta` | Keeps out cities with the same name elsewhere, such as Cochrane, ON. |
+| `DDF_CITIES` | none (all of Canada) | Optional: limit the site to these cities (comma-separated), e.g. `Calgary,Airdrie,Cochrane`. |
+| `DDF_PROVINCE` | `Alberta` | Province of `DDF_CITIES` (keeps out same-named cities elsewhere, such as Cochrane, ON). |
 | `TURSO_DATABASE_URL`, `TURSO_AUTH_TOKEN` | none | Use Turso instead of the local file (both the sync and the website). |
-| `DDF_DB_PATH` | `.data/ddf.sqlite` | Local database location, used when Turso is not set. |
+| `DDF_DB` | none | Set to `turso` to make `npm run dev` use Turso; otherwise development uses the local file when it exists. |
+| `DDF_DB_PATH` | `.data/ddf.sqlite` | Local database location. |
 | `DDF_DESTINATION_ID` | none | Turns on CREA analytics "View" events (`/api/ddf/analytics`). |
 
-**Hosting on Vercel (free plans).** Vercel's filesystem is read-only and the database is too large for Git, so production uses Turso:
+**Hosting on Vercel.** Vercel's filesystem is read-only and the database is too large for Git, so production uses Turso:
 
-1. Create a Turso database and an auth token (dashboard at turso.tech, or `turso db create toor-avenues` and `turso db tokens create toor-avenues`).
-2. Add `TURSO_DATABASE_URL` and `TURSO_AUTH_TOKEN` to `.env.local`, then run `npm run db:upload` once. It copies `.data/ddf.sqlite` into Turso (about a minute) and is safe to re-run.
+1. Create a Turso database (pick the region closest to your Vercel functions, e.g. AWS us-east-1) and an auth token with read and write access.
+2. Load the listings into Turso, either way:
+   - **Recommended for the national first load:** add the GitHub secrets (step 4), then run the **DDF listing sync** workflow from the Actions tab. It syncs straight into Turso from GitHub's fast network.
+   - Or run `npm run db:upload` to copy your local `.data/ddf.sqlite` (about 1 GB nationally; resumable, retries dropped connections).
 3. In Vercel → Project → Settings → Environment Variables, add `TURSO_DATABASE_URL`, `TURSO_AUTH_TOKEN` and `SITE_URL`, then redeploy. The DDF credentials are not needed on Vercel.
-4. In GitHub → Settings → Secrets and variables → Actions, add `DDF_CLIENT_ID`, `DDF_CLIENT_SECRET`, `TURSO_DATABASE_URL` and `TURSO_AUTH_TOKEN`. The workflow `.github/workflows/ddf-sync.yml` then syncs every 3 hours (CREA requires at least daily), and can be run by hand from the Actions tab.
+4. In GitHub → Settings → Secrets and variables → Actions, add `DDF_CLIENT_ID`, `DDF_CLIENT_SECRET`, `TURSO_DATABASE_URL` and `TURSO_AUTH_TOKEN`. The workflow `.github/workflows/ddf-sync.yml` then syncs every 3 hours and can be run by hand from the Actions tab.
 
-With Turso set in `.env.local`, `npm run dev` and `npm run ddf:sync` also use Turso; remove the two variables to go back to the local file. The sync only rewrites a listing's photos when they changed, which keeps writes well inside Turso's free allowance.
+**Plan sizing.** Turso bills row reads, row writes and storage. Syncing is cheap (a few thousand changed rows per run). Page views read the stored market summary, but every search still counts its matching homes, and a search across all of Canada reads up to about 150,000 rows. For a public national site, budget for Turso's entry paid plan, and check the Usage page in the Turso dashboard after launch.
 
-**Scheduling elsewhere.** On a server with a persistent disk (a VPS, or similar), the local file works without Turso: schedule `npm run ddf:sync` with cron (`0 * * * * cd /path/to/site && npm run ddf:sync`) or Windows Task Scheduler. The homepage revalidates every minute, and search results are read on every request.
+**Scheduling elsewhere.** On a server with a persistent disk (a VPS, or similar), the local file works without Turso: schedule `npm run ddf:sync` with cron (`17 */3 * * * cd /path/to/site && npm run ddf:sync`) or Windows Task Scheduler.
+
+**Sitemaps.** `/sitemap.xml` lists the site's pages. Listings are split across `/listings/sitemap/{n}.xml` files (40,000 each, under Google's 50,000-URL limit), and `robots.txt` lists every file.
 
 The website behaviour:
 - When no database exists, the homepage and `/search` fall back to the illustrative sample cards.
@@ -113,5 +122,6 @@ The DDF Web API documentation covers syncing and analytics but not display rules
 - [ ] Linking to the REALTOR.ca listing page (`ListingURL`) from the detail view is acceptable as implemented.
 - [ ] Resizing and caching photos through `next/image` is allowed. If not, add `unoptimized` to the listing `<Image>` elements so photos are served directly from the CREA CDN.
 - [ ] Whether CREA analytics events are expected. They are enabled with `DDF_DESTINATION_ID`. The privacy policy should mention the analytics cookie and CREA analytics.
-- [ ] The GitHub Actions sync is running (Actions tab shows green runs), and the client accepts the removal timing (up to 3 hours, plus up to 1 hour of page caching).
+- [ ] The GitHub Actions sync is running (Actions tab shows green runs), and the client accepts the removal timing (sold listings leave at the daily full check, plus up to 1 hour of page caching).
+- [ ] Showing listings from other provinces is allowed under the client's DDF agreement and their brokerages' advertising rules (REALTORS® are licensed by province; the Buy page tells out-of-province buyers they will be connected with a REALTOR® licensed where they buy).
 - [ ] The "Open houses only" filter is disabled because `OpenHouse` data is not synced yet.

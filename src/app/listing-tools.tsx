@@ -8,10 +8,10 @@ import { useMemo, useState } from "react";
 // nears the screen. Built on the native scroll-snap PhotoCarousel.
 // ---------------------------------------------------------------------------
 
-type CardPhotosProps = { listingKey: string; photo: string; count: number; alt: string; sizes: string };
+type CardPhotosProps = { listingKey: string; photo: string; count: number; alt: string; sizes: string; href?: string };
 
-export function CardPhotos({ listingKey, photo, count, alt, sizes }: CardPhotosProps) {
-  return <PhotoCarousel photos={[photo]} count={count} fetchKey={listingKey} alt={alt} sizes={sizes} />;
+export function CardPhotos({ listingKey, photo, count, alt, sizes, href }: CardPhotosProps) {
+  return <PhotoCarousel photos={[photo]} count={count} fetchKey={listingKey} alt={alt} sizes={sizes} href={href} />;
 }
 
 // ---------------------------------------------------------------------------

@@ -35,6 +35,8 @@ export type Listing = {
 export type ListingSort = "newest" | "low" | "high" | "sqft";
 
 export type ListingFilters = {
+  /** Province or territory name as in the feed ("Ontario"); codes like "ON" are accepted in URLs. */
+  province?: string;
   city?: string;
   query?: string;
   zone?: string;
@@ -137,12 +139,24 @@ type Row = {
   brokerage: string | null;
 };
 
-const PROVINCE_CODES: Record<string, string> = { Alberta: "AB" };
+export const PROVINCE_CODES: Record<string, string> = {
+  "Alberta": "AB", "British Columbia": "BC", "Manitoba": "MB", "New Brunswick": "NB", "Newfoundland & Labrador": "NL",
+  "Nova Scotia": "NS", "Northwest Territories": "NT", "Nunavut": "NU", "Ontario": "ON", "Prince Edward Island": "PE",
+  "Quebec": "QC", "Saskatchewan": "SK", "Yukon": "YT",
+};
+const PROVINCE_BY_CODE = Object.fromEntries(Object.entries(PROVINCE_CODES).map(([name, code]) => [code, name]));
+
+/** "ON", "on", "Ontario" → "Ontario" (undefined when unknown). */
+export function provinceName(value?: string) {
+  if (!value) return undefined;
+  const text = value.trim();
+  return PROVINCE_BY_CODE[text.toUpperCase()] ?? Object.keys(PROVINCE_CODES).find(name => name.toLowerCase() === text.toLowerCase());
+}
 
 function toListing(row: Row): Listing {
   const showAddress = row.display_address === 1 && Boolean(row.address);
-  const province = row.province ? PROVINCE_CODES[row.province] ?? row.province : "AB";
-  const place = [row.community, row.city ? `${row.city}, ${province}` : province].filter(Boolean).join(" · ");
+  const province = row.province ? PROVINCE_CODES[row.province] ?? row.province : "";
+  const place = [row.community, row.city ? [row.city, province].filter(Boolean).join(", ") : province].filter(Boolean).join(" · ");
   const mls = row.listing_id ?? row.listing_key;
   const hours = Math.max(0, row.hours);
   const days = Math.floor(hours / 24);
@@ -150,12 +164,12 @@ function toListing(row: Row): Listing {
   const openHouse = row.open_house_date ? `Open house · ${dayFormat.format(new Date(`${row.open_house_date}T00:00:00Z`))}` : null;
   return {
     id: row.listing_key,
-    slug: [showAddress ? row.address! : "home", row.city ?? "alberta", mls].map(slugify).filter(Boolean).join("-"),
+    slug: [showAddress ? row.address! : "home", row.city ?? row.province ?? "canada", mls].map(slugify).filter(Boolean).join("-"),
     mls,
     price: row.price,
     priceLabel: money.format(row.price),
     address: showAddress ? row.address! : "Address withheld by request",
-    area: showAddress ? place : province,
+    area: showAddress ? place : [row.city, province].filter(Boolean).join(", "),
     beds: row.bedrooms,
     baths: row.bathrooms,
     sqft: row.floor_area_sqft,
@@ -183,8 +197,7 @@ const COLUMNS = `
     l.remarks, l.listing_url, l.display_address,
     (julianday('now') - julianday(l.listed_at)) * 24 AS hours,
     (SELECT MIN(oh.date) FROM open_houses oh WHERE oh.listing_key = l.listing_key AND oh.date >= ${TODAY}) AS open_house_date,
-    (SELECT p.url FROM photos p WHERE p.listing_key = l.listing_key ORDER BY p.preferred DESC, p.position LIMIT 1) AS photo,
-    (SELECT COUNT(*) FROM photos p WHERE p.listing_key = l.listing_key) AS photo_count,
+    l.photo, COALESCE(l.photos_count, 0) AS photo_count,
     o.name AS brokerage`;
 const FROM = "FROM listings l LEFT JOIN offices o ON o.office_key = l.list_office_key";
 const SELECT = `SELECT ${COLUMNS} ${FROM}`;
@@ -208,8 +221,7 @@ export async function featuredListings(limit = 3): Promise<Listing[]> {
   const db = await database();
   if (!db) return [];
   const rows = await db.all(`${SELECT}
-    WHERE ${BASE_WHERE.join(" AND ")} AND l.city = 'Calgary' AND l.display_address = 1
-      AND EXISTS (SELECT 1 FROM photos p WHERE p.listing_key = l.listing_key)
+    WHERE ${BASE_WHERE.join(" AND ")} AND l.display_address = 1 AND l.photo IS NOT NULL
     ORDER BY l.listed_at DESC LIMIT ?`, limit) as Row[];
   return rows.map(toListing);
 }
@@ -276,6 +288,7 @@ function filterClauses(filters: Omit<ListingFilters, "sort" | "page">) {
   const values: SqlValue[] = [];
   const add = (clause: string, ...params: SqlValue[]) => { where.push(clause); values.push(...params); };
 
+  if (filters.province) add("l.province = ?", filters.province);
   if (filters.city) add("l.city = ? COLLATE NOCASE", filters.city);
   if (filters.query) {
     const like = escapeLike(filters.query);
@@ -328,13 +341,13 @@ export async function mapListings(filters: Omit<ListingFilters, "sort" | "page">
   const located = `${whereSql} AND l.display_address = 1 AND l.latitude IS NOT NULL AND l.longitude IS NOT NULL`;
   const total = (await db.get(`SELECT COUNT(*) AS count FROM listings l WHERE ${located}`, ...values) as { count: number }).count;
   const rows = await db.all(`SELECT l.listing_key, l.listing_id, l.address, l.city, l.price, l.latitude, l.longitude, l.bedrooms, l.bathrooms,
-      (SELECT p.url FROM photos p WHERE p.listing_key = l.listing_key ORDER BY p.preferred DESC, p.position LIMIT 1) AS photo
+      l.photo
     FROM listings l WHERE ${located} ORDER BY l.listed_at DESC LIMIT ?`, ...values, limit) as {
       listing_key: string; listing_id: string | null; address: string; city: string | null; price: number; latitude: number; longitude: number;
       bedrooms: number | null; bathrooms: number | null; photo: string | null }[];
   const points = rows.map(row => ({
     id: row.listing_key,
-    slug: [row.address, row.city ?? "alberta", row.listing_id ?? row.listing_key].map(slugify).filter(Boolean).join("-"),
+    slug: [row.address, row.city ?? "canada", row.listing_id ?? row.listing_key].map(slugify).filter(Boolean).join("-"),
     lat: row.latitude, lng: row.longitude, price: row.price, label: money.format(row.price), address: row.address,
     beds: row.bedrooms, baths: row.bathrooms, photo: row.photo,
   }));
@@ -342,25 +355,32 @@ export async function mapListings(filters: Omit<ListingFilters, "sort" | "page">
 }
 
 /** Number of listings matching the filters (used for the live "Show N homes" count). */
+/**
+ * Count from the stored market summary when the filters are "everything" or "one province"
+ * (the most common searches), so they do not scan up to ~150,000 rows. Null otherwise.
+ */
+async function summaryCount(filters: Omit<ListingFilters, "sort" | "page">) {
+  const set = Object.entries(filters).filter(([key, value]) => key !== "sort" && key !== "page" && value !== undefined && value !== false && !(Array.isArray(value) && !value.length));
+  if (set.length > 1 || (set.length === 1 && set[0][0] !== "province")) return null;
+  const market = await getMarket();
+  if (!market) return null;
+  return filters.province ? market.provinces.find(province => province.name === filters.province)?.count ?? 0 : market.total;
+}
+
 export async function countListings(filters: Omit<ListingFilters, "sort" | "page">): Promise<number | null> {
   const db = await database();
   if (!db) return null;
+  const known = await summaryCount(filters);
+  if (known !== null) return known;
   const { whereSql, values } = filterClauses(filters);
   return (await db.get(`SELECT COUNT(*) AS count FROM listings l WHERE ${whereSql}`, ...values) as { count: number }).count;
-}
-
-/** Asking prices of every displayable listing, for the price-filter histogram. */
-export async function allListingPrices(): Promise<number[]> {
-  const db = await database();
-  if (!db) return [];
-  return (await db.all(`SELECT l.price FROM listings l WHERE ${BASE_WHERE.join(" AND ")}`) as { price: number }[]).map(row => row.price);
 }
 
 export async function searchListings(filters: ListingFilters): Promise<ListingResults | null> {
   const db = await database();
   if (!db) return null;
   const { whereSql, values } = filterClauses(filters);
-  const total = (await db.get(`SELECT COUNT(*) AS count FROM listings l WHERE ${whereSql}`, ...values) as { count: number }).count;
+  const total = await summaryCount(filters) ?? (await db.get(`SELECT COUNT(*) AS count FROM listings l WHERE ${whereSql}`, ...values) as { count: number }).count;
   const pages = Math.max(1, Math.ceil(total / PAGE_SIZE));
   const page = Math.min(Math.max(1, filters.page), pages);
   const order = filters.sort === "low" ? "l.price ASC" : filters.sort === "high" ? "l.price DESC"
@@ -403,9 +423,8 @@ const KEY_PATTERN = /^\d{1,15}$/;
 export async function listingPhotos(listingKey: string): Promise<string[]> {
   const db = await database();
   if (!db || !KEY_PATTERN.test(listingKey)) return [];
-  const rows = await db.all(`SELECT p.url FROM photos p JOIN listings l ON l.listing_key = p.listing_key
-    WHERE p.listing_key = ? AND l.display_listing = 1 ORDER BY p.position`, listingKey) as { url: string }[];
-  return rows.map(row => row.url);
+  const row = await db.get(`SELECT photos FROM listings WHERE listing_key = ? AND display_listing = 1`, listingKey) as { photos: string | null } | undefined;
+  try { return row?.photos ? (JSON.parse(row.photos) as string[]).filter(url => typeof url === "string") : []; } catch { return []; }
 }
 
 type Raw = Record<string, unknown>;
@@ -521,13 +540,13 @@ export async function similarListings(listing: ListingDetail, limit = 3): Promis
 }
 
 /** Every displayable listing's slug and last change, for the XML sitemap. */
-export async function sitemapListings(): Promise<{ slug: string; modifiedAt: string | null }[]> {
+export async function sitemapListings(offset = 0, limit = 50_000): Promise<{ slug: string; modifiedAt: string | null }[]> {
   const db = await database();
   if (!db) return [];
   const rows = await db.all(`SELECT l.listing_key, l.listing_id, l.address, l.city, l.display_address, l.modified_at FROM listings l
-    WHERE ${BASE_WHERE.join(" AND ")} ORDER BY l.listed_at DESC`) as { listing_key: string; listing_id: string | null; address: string | null; city: string | null; display_address: number; modified_at: string | null }[];
+    WHERE ${BASE_WHERE.join(" AND ")} ORDER BY l.listing_key LIMIT ? OFFSET ?`, limit, offset) as { listing_key: string; listing_id: string | null; address: string | null; city: string | null; display_address: number; modified_at: string | null }[];
   return rows.map(row => ({
-    slug: [row.display_address === 1 && row.address ? row.address : "home", row.city ?? "alberta", row.listing_id ?? row.listing_key].map(slugify).filter(Boolean).join("-"),
+    slug: [row.display_address === 1 && row.address ? row.address : "home", row.city ?? "canada", row.listing_id ?? row.listing_key].map(slugify).filter(Boolean).join("-"),
     modifiedAt: row.modified_at,
   }));
 }
@@ -579,9 +598,16 @@ export function parseListingFilters(params: Params): ListingFilters {
   const type = get("type", "property_type");
   const status = get("status").toLowerCase();
   const features = get("features").toLowerCase();
-  const query = get("query", "keyword", "q", "kw", "mls");
+  let query = get("query", "keyword", "q", "kw", "mls");
   // "Calgary NW" from the city list means Calgary, north-west quadrant.
   let city = /^any/i.test(get("city")) ? "" : get("city");
+  // "Toronto, ON" from a city picker carries its province.
+  const cityProvince = city.match(/^(.+?),\s*([A-Za-z]{2})$/);
+  if (cityProvince && provinceName(cityProvince[2])) city = cityProvince[1].trim();
+  let province = provinceName(get("province", "prov")) ?? (cityProvince ? provinceName(cityProvince[2]) : undefined);
+  // A city picked from the suggestions in the search box ("Halifax, NS") is a city filter, not free text.
+  const typedCity = query.match(/^([^,]{2,60}),\s*([A-Za-z]{2})$/);
+  if (typedCity && provinceName(typedCity[2]) && !city) { city = typedCity[1].trim(); province = provinceName(typedCity[2]); query = ""; }
   let zone = get("zone").toUpperCase();
   const quadrantCity = city.match(/^calgary\s+(nw|ne|sw|se)$/i);
   if (quadrantCity) { city = "Calgary"; zone ||= quadrantCity[1].toUpperCase(); }
@@ -589,6 +615,7 @@ export function parseListingFilters(params: Params): ListingFilters {
   let maxPrice = minimum(get("max", "max_price", "maxPrice")) ?? rangeMax;
   if (minPrice && maxPrice && minPrice > maxPrice) [minPrice, maxPrice] = [maxPrice, minPrice];
   return {
+    province,
     city: city ? city.slice(0, 60) : undefined,
     query: query.slice(0, 80) || undefined,
     zone: zone && ZONES[zone] ? zone : undefined,
@@ -628,48 +655,68 @@ export function describeZone(zone?: string) {
 
 
 // ---------------------------------------------------------------------------
-// Market data for the Sell and Buy pages (all from current active listings).
+// Market data (headline numbers, price chart, provinces and cities). Computed by
+// the sync (scripts/market.mjs) and stored as one row, so page views never scan
+// every listing in Canada.
 // ---------------------------------------------------------------------------
 
 const percentile = (sorted: number[], q: number) => sorted.length ? sorted[Math.min(sorted.length - 1, Math.max(0, Math.round(q * (sorted.length - 1))))] : 0;
 
 export type MarketStats = { total: number; fresh: number; medianPrice: number; medianDays: number };
+export type ProvinceSummary = { name: string; code: string; count: number; fresh: number; medianPrice: number; medianPpsf: number | null };
+export type CitySummary = { city: string; province: string; code: string; count: number; fresh: number; medianPrice: number; medianPpsf: number | null; lat: number | null; lng: number | null };
+export type FeaturedCity = { city: string; province: string; code: string; count: number; medianPrice: number; photo: string | null };
+export type Market = MarketStats & { updatedAt: string; priceQuantiles: number[]; typeCounts?: Record<string, number>; provinces: ProvinceSummary[]; cities: CitySummary[]; featured: FeaturedCity[] };
+
+/** The stored market summary, or null before the first sync. */
+export async function getMarket(): Promise<Market | null> {
+  const db = await database();
+  if (!db) return null;
+  const row = await db.get(`SELECT value FROM sync_state WHERE key = 'market'`) as { value: string } | undefined;
+  if (!row?.value) return null;
+  try { return JSON.parse(row.value) as Market; } catch { return null; }
+}
 
 /** Headline numbers: homes for sale, new this week, typical price, typical days on market. */
 export async function marketStats(): Promise<MarketStats | null> {
-  const db = await database();
-  if (!db) return null;
-  const rows = await db.all(`SELECT l.price, (julianday('now') - julianday(l.listed_at)) AS days FROM listings l WHERE ${BASE_WHERE.join(" AND ")}`) as { price: number; days: number | null }[];
-  const prices = rows.map(row => row.price).sort((a, b) => a - b);
-  const days = rows.map(row => row.days ?? 0).filter(value => value >= 0).sort((a, b) => a - b);
-  return { total: rows.length, fresh: days.filter(value => value <= NEW_LISTING_DAYS).length, medianPrice: percentile(prices, 0.5), medianDays: Math.round(percentile(days, 0.5)) };
+  const market = await getMarket();
+  return market ? { total: market.total, fresh: market.fresh, medianPrice: market.medianPrice, medianDays: market.medianDays } : null;
 }
 
-export type CommunitySnapshot = { community: string; city: string; count: number; medianPrice: number; medianPpsf: number | null };
-
-/** Busiest communities with their typical asking price and price per square foot. */
-export async function communitySnapshot(limit = 10): Promise<CommunitySnapshot[]> {
-  const db = await database();
-  if (!db) return [];
-  const rows = await db.all(`SELECT l.community, l.city, l.price, l.floor_area_sqft AS sqft FROM listings l
-    WHERE ${BASE_WHERE.join(" AND ")} AND l.community IS NOT NULL AND l.community <> ''`) as { community: string; city: string; price: number; sqft: number | null }[];
-  const groups = new Map<string, typeof rows>();
-  for (const row of rows) { const key = `${row.community}|${row.city}`; const list = groups.get(key); if (list) list.push(row); else groups.set(key, [row]); }
-  return [...groups.values()].sort((a, b) => b.length - a.length).slice(0, limit).map(list => {
-    const prices = list.map(row => row.price).sort((a, b) => a - b);
-    const ppsf = list.filter(row => row.sqft && row.sqft > 300).map(row => row.price / row.sqft!).sort((a, b) => a - b);
-    return { community: list[0].community, city: list[0].city, count: list.length, medianPrice: percentile(prices, 0.5), medianPpsf: ppsf.length >= 3 ? Math.round(percentile(ppsf, 0.5)) : null };
-  });
+/** Number of homes per price-slider step, estimated from the stored price distribution. */
+export function priceBins(quantiles: number[], total: number, steps: number[]) {
+  const bins = steps.map(() => 0);
+  if (!quantiles.length || !total) return bins;
+  // Each gap between neighbouring quantiles holds an equal share of all homes.
+  const share = total / (quantiles.length - 1);
+  for (let i = 1; i < quantiles.length; i++) {
+    const price = (quantiles[i - 1] + quantiles[i]) / 2;
+    const next = steps.findIndex(step => step > price);
+    bins[next < 0 ? steps.length - 1 : Math.max(0, next - 1)] += share;
+  }
+  return bins.map(Math.round);
 }
 
-/** Communities with enough listings to estimate from (for the home value picker). */
-export async function estimateCommunities(): Promise<{ community: string; city: string; count: number }[]> {
+/** Estimated number of homes priced from `min` (inclusive) up to `max`, from the stored price distribution. */
+export function homesInPriceRange(quantiles: number[], total: number, min = 0, max = Infinity) {
+  if (quantiles.length < 2 || !total) return 0;
+  const share = total / (quantiles.length - 1);
+  let homes = 0;
+  for (let i = 1; i < quantiles.length; i++) {
+    const price = (quantiles[i - 1] + quantiles[i]) / 2;
+    if (price >= min && price < max) homes += share;
+  }
+  return Math.round(homes);
+}
+
+/** Communities in one city with enough homes to estimate from (for the home value picker). */
+export async function estimateCommunities(city: string, province?: string): Promise<{ community: string; count: number }[]> {
   const db = await database();
-  if (!db) return [];
-  const rows = await db.all(`SELECT l.community, l.city, COUNT(*) AS count FROM listings l WHERE ${BASE_WHERE.join(" AND ")} AND l.community IS NOT NULL AND l.community <> ''
-    GROUP BY l.community, l.city HAVING COUNT(*) >= 3 ORDER BY l.community`) as { community: string; city: string; count: number }[];
-  // SQLite rows have a null prototype; plain objects are needed to pass them to client components.
-  return rows.map(row => ({ community: row.community, city: row.city, count: row.count }));
+  if (!db || !city) return [];
+  const rows = await db.all(`SELECT l.community, COUNT(*) AS count FROM listings l
+    WHERE ${BASE_WHERE.join(" AND ")} AND l.city = ? COLLATE NOCASE ${province ? "AND l.province = ?" : ""} AND l.community IS NOT NULL AND l.community <> ''
+    GROUP BY l.community HAVING COUNT(*) >= 3 ORDER BY l.community`, city, ...(province ? [province] : [])) as { community: string; count: number }[];
+  return rows.map(row => ({ community: row.community, count: row.count }));
 }
 
 export type ValueEstimate = { low: number; mid: number; high: number; basis: string; sample: number; comparables: Listing[] };
@@ -679,16 +726,19 @@ export type ValueEstimate = { low: number; mid: number; high: number; basis: str
  * where possible, widening to the community, then the city. Uses price per square foot
  * when a size is given, otherwise prices of homes with a similar number of bedrooms.
  */
-export async function estimateValue(input: { community?: string; city?: string; type?: string; beds?: number; sqft?: number }): Promise<ValueEstimate | null> {
+export async function estimateValue(input: { community?: string; city?: string; province?: string; type?: string; beds?: number; sqft?: number }): Promise<ValueEstimate | null> {
   const db = await database();
-  if (!db) return null;
+  if (!db || !input.city) return null;
   const type = input.type ? TYPE_FILTERS[slugify(input.type)] : undefined;
+  const city = input.city;
+  const place: { where: string[]; values: SqlValue[] } = input.province
+    ? { where: ["l.city = ? COLLATE NOCASE", "l.province = ?"], values: [city, input.province] }
+    : { where: ["l.city = ? COLLATE NOCASE"], values: [city] };
   const scopes: { where: string[]; values: SqlValue[]; label: string }[] = [];
-  if (input.community && type) scopes.push({ where: ["l.community = ?", type.clause], values: [input.community], label: `${type.label.toLowerCase()} listings in ${input.community}` });
-  if (input.community) scopes.push({ where: ["l.community = ?"], values: [input.community], label: `listings in ${input.community}` });
-  const city = input.city || "Calgary";
-  if (type) scopes.push({ where: ["l.city = ?", type.clause], values: [city], label: `${type.label.toLowerCase()} listings in ${city}` });
-  scopes.push({ where: ["l.city = ?"], values: [city], label: `listings in ${city}` });
+  if (input.community && type) scopes.push({ where: [...place.where, "l.community = ?", type.clause], values: [...place.values, input.community], label: `${type.label.toLowerCase()} listings in ${input.community}` });
+  if (input.community) scopes.push({ where: [...place.where, "l.community = ?"], values: [...place.values, input.community], label: `listings in ${input.community}` });
+  if (type) scopes.push({ where: [...place.where, type.clause], values: place.values, label: `${type.label.toLowerCase()} listings in ${city}` });
+  scopes.push({ where: place.where, values: place.values, label: `listings in ${city}` });
 
   type CompRow = { listing_key: string; price: number; sqft: number | null; beds: number | null };
   for (const scope of scopes) {

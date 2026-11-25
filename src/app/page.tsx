@@ -2,11 +2,11 @@ import Image from "next/image";
 import Link from "next/link";
 import { cacheLife } from "next/cache";
 import { ViewTransition } from "react";
-import { allListingPrices, countListings, featuredListings } from "../lib/listings";
+import { featuredListings } from "../lib/listings";
+import { cachedMarket, searchSuggestions } from "./market-data";
 import { DdfNotice } from "./ddf-notice";
 import { CardPhotos } from "./listing-tools";
-import { BudgetRange } from "./editorial-controls";
-import HomeSmartSearch from "./home-search";
+import EditorialSearch, { BudgetRange } from "./editorial-controls";
 import { DepthEffects } from "./depth-effects";
 import { CountUp } from "./count-up";
 import { MobileMenu } from "./mobile-menu";
@@ -33,21 +33,19 @@ const sampleListings = [
   { price: "$649,000", address: "64 Edforth Crescent NW", area: "Northwest Calgary", beds: 3, baths: 4, sqft: "1,622", image: "listing-3.png" },
 ];
 
-const priceTabs = ["All prices", "Under $250,000", "$250,000–$500,000", "$500,000–$750,000", "$750,000+", "Custom range"];
+const priceTabs = ["All prices", "Under $500,000", "$500,000–$1,000,000", "$1,000,000–$2,000,000", "$2,000,000+", "Custom range"];
 
 const exclusiveSide = [
   { label: "01 / INTERIORS", title: "Room to unwind.", copy: "Everyday living, beautifully considered.", image: "exclusive-1.png" },
   { label: "02 / OPEN SPACES", title: "Make room for more.", copy: "A fresh perspective on your next address.", image: "exclusive-2.png" },
 ];
 
-const communities = [
-  { name: "Arbour Lake", zone: "NORTHWEST", copy: "Lake-community living", image: "community-1.png" },
-  { name: "Aspen Woods", zone: "SOUTHWEST", copy: "West-side neighbourhoods", image: "community-2.png" },
-  { name: "Cranston", zone: "SOUTHEAST", copy: "Pathways & open spaces", image: "community-3.png" },
+// Shown in "Top markets" before the first sync (no live city data yet).
+const fallbackMarkets = [
+  { city: "Toronto", code: "ON", image: "community-1.png" },
+  { city: "Vancouver", code: "BC", image: "community-2.png" },
+  { city: "Calgary", code: "AB", image: "community-3.png" },
 ];
-
-const cityZones = ["NW", "NE", "SW", "SE"];
-const nearbyCities = ["Airdrie", "Chestermere", "Cochrane"];
 
 const services = [
   { step: "01 —", title: "Sell with a strategy", copy: "Sell fast. Sell smart. Sell for top dollar. From thoughtful pricing to innovative marketing, we guide you from listing to closing.", href: "/sell", image: "service-1.png", cta: "Free Market Evaluation" },
@@ -56,15 +54,15 @@ const services = [
 ];
 
 const values = [
-  { icon: "why-location.svg", title: "A local perspective", copy: "Understand communities, amenities and the details that make Calgary feel like home." },
+  { icon: "why-location.svg", title: "Local insight, national reach", copy: "Live listings in every province on the feed, with guidance on the communities, amenities and details that make a place feel like home." },
   { icon: "why-speaker.svg", title: "Marketing with purpose", copy: "A thoughtful presentation and a personalized strategy designed around your property." },
   { icon: "why-chat.svg", title: "Guidance at every step", copy: "Clear communication from your first conversation to the day you receive the keys." },
 ];
 
 const articles = [
-  { label: "01 / BUYING", title: "How to buy a house in Calgary", copy: "From your first search to the keys in your hand. Start with a clear plan for the journey ahead.", image: "journal-1.png", href: "/buy" },
-  { label: "02 / SELLING", title: "Tips to sell a home in Calgary and area", copy: "Thoughtful preparation and a smarter approach to your next move.", image: "journal-2.png", href: "/sell" },
-  { label: "03 / FINANCING", title: "How much mortgage can I afford in Calgary?", copy: "Make room for what matters. Get a clearer picture of your home-buying budget.", image: "journal-3.png", href: "/buy#pre-approval" },
+  { label: "01 / BUYING", title: "How to buy a house in Canada", copy: "From your first search to the keys in your hand. Start with a clear plan for the journey ahead.", image: "journal-1.png", href: "/buy" },
+  { label: "02 / SELLING", title: "Tips to sell your home for top dollar", copy: "Thoughtful preparation and a smarter approach to your next move.", image: "journal-2.png", href: "/sell" },
+  { label: "03 / FINANCING", title: "How much mortgage can I afford?", copy: "Stress test, down payment and closing costs by province. Get a clearer picture of your budget.", image: "journal-3.png", href: "/buy#pre-approval" },
 ];
 
 const footerLinks = [
@@ -154,20 +152,16 @@ function Header() {
   );
 }
 
-// Live market numbers for the hero (refreshed hourly from the synced DDF® data).
+// Live market numbers for the hero (from the market summary stored by each sync).
 async function heroStats() {
-  "use cache";
-  cacheLife("hours");
-  const [total, fresh, prices] = await Promise.all([countListings({}), countListings({ newOnly: true }), allListingPrices()]);
-  prices.sort((a, b) => a - b);
-  const typical = prices.length ? prices[Math.floor(prices.length / 2)] : 0;
-  return { total: total ?? 0, fresh: fresh ?? 0, typical };
+  const market = await cachedMarket();
+  return { total: market?.total ?? 0, fresh: market?.fresh ?? 0, typical: market?.medianPrice ?? 0 };
 }
 
 const HERO_SLIDES = [
-  { src: "why-landscape.png", alt: "Cranston, southeast Calgary" },
+  { src: "why-landscape.png", alt: "Homes beside open green space" },
   { src: "sunlit-interior.png", alt: "Sunlit modern kitchen and living space" },
-  { src: "community-3.png", alt: "Pathways and open space in a Calgary community" },
+  { src: "community-3.png", alt: "Pathways and open space in a residential community" },
   { src: "preapproval.png", alt: "Bright kitchen ready for a new chapter" },
 ];
 
@@ -189,7 +183,7 @@ async function Hero() {
       <div className="cine-shade" aria-hidden="true" />
 
       <div className="cine-inner ed-shell">
-        <p className="cine-kicker"><span className="cine-live" aria-hidden="true" />CALGARY &amp; SURROUNDING AREAS · LIVE MLS® LISTINGS</p>
+        <p className="cine-kicker"><span className="cine-live" aria-hidden="true" />HOMES FOR SALE ACROSS CANADA · LIVE MLS® LISTINGS</p>
         <h1 id="hero-title" className="cine-title">
           {HERO_WORDS.map((line, l) => (
             <span className="cine-line" key={l}>
@@ -197,25 +191,24 @@ async function Hero() {
             </span>
           ))}
         </h1>
-        <p className="cine-lead">A place to belong. A team on your side. Your next chapter starts with local guidance that puts you first.</p>
+        <p className="cine-lead">A place to belong, from coast to coast. A team on your side. Search homes across Canada and move forward with guidance that puts you first.</p>
         <div className="cine-actions">
           <Link className="cine-btn primary" href="/contact?interest=home-value">Free Market Evaluation</Link>
           <Link className="cine-btn ghost" href="/search#listing-results">Explore {stats.total ? stats.total.toLocaleString("en-CA") : ""} homes <span aria-hidden="true">→</span></Link>
         </div>
         {stats.total > 0 && <dl className="cine-stats">
-          <div><dt>Homes for sale now</dt><dd><CountUp value={stats.total} /></dd></div>
+          <div><dt>Homes for sale in Canada</dt><dd><CountUp value={stats.total} /></dd></div>
           <div><dt>New in the last 7 days</dt><dd><CountUp value={stats.fresh} /></dd></div>
           <div><dt>Typical asking price</dt><dd><CountUp value={Math.round(stats.typical / 1000)} prefix="$" suffix="K" /></dd></div>
         </dl>}
       </div>
 
-      <div className="cine-search"><HomeSmartSearch variant="hero" /></div>
       <small className="cine-credit">TOOR — Team of Outstanding REALTORS®</small>
     </section>
   );
 }
 
-// Newest Calgary listings from the synced DDF® database. Cached and refreshed every
+// Newest listings across Canada from the synced DDF® database. Cached and refreshed every
 // minute, so new syncs (and removals) appear without a rebuild. Falls back to
 // illustrative examples when the database has no listings yet.
 async function FeaturedHomes() {
@@ -240,7 +233,7 @@ async function FeaturedHomes() {
             />
           ))}
         </div>
-        <p className="ed-disclaimer">Illustrative listing examples from the ToorAvenues Calgary archive. Prices and availability are subject to change. Photos are for inspiration and are not photographs of the listed properties.</p>
+        <p className="ed-disclaimer">Illustrative listing examples from the ToorAvenues archive. Prices and availability are subject to change. Photos are for inspiration and are not photographs of the listed properties.</p>
       </>
     );
   }
@@ -251,7 +244,7 @@ async function FeaturedHomes() {
         {live.map(home => (
           <PropertyCard
             key={home.id}
-            photo={home.photo && <CardPhotos listingKey={home.id} photo={home.photo} count={home.photoCount} alt={`Photo of ${home.address}`} sizes={PROPERTY_SIZES} />}
+            photo={home.photo && <CardPhotos listingKey={home.id} photo={home.photo} count={home.photoCount} alt={`Photo of ${home.address}`} sizes={PROPERTY_SIZES} href={`/listing/${home.slug}`} />}
             badge={home.badge ?? `MLS® ${home.mls}`}
             price={home.priceLabel}
             address={home.address}
@@ -271,7 +264,7 @@ async function FeaturedHomes() {
 function Listings() {
   return (
     <section className="ed-section ed-listings ed-shell" id="homes">
-      <SectionHeading label="CALGARY HOMES" title="Explore Calgary homes. Imagine what’s next." copy="From a first address to a little more room, discover possibilities across the city." />
+      <SectionHeading label="NEW ACROSS CANADA" title="Explore homes from coast to coast." copy="From a first condo in the city to a family home with a little more room, the newest listings in every province, updated through the day." />
       <div className="ed-price-tabs">
         {priceTabs.map((tab, i) => {
           const isCustom = i === priceTabs.length - 1;
@@ -324,7 +317,7 @@ function About() {
     <section className="ed-section ed-about ed-shell">
       <div>
         <Label>ABOUT US</Label>
-        <h2>Local knowledge. Real relationships. Your trusted partner.</h2>
+        <h2>Market knowledge. Real relationships. Your trusted partner across Canada.</h2>
         <p className="lead">ToorAvenues — where your goals become our mission.</p>
         <p>We believe real estate is more than just buying and selling — it’s about building relationships, creating opportunities, and turning dreams into addresses.</p>
         <h3>Turning dreams into addresses.</h3>
@@ -345,32 +338,53 @@ function About() {
   );
 }
 
-function Communities() {
+const money = new Intl.NumberFormat("en-CA", { style: "currency", currency: "CAD", maximumFractionDigits: 0 });
+const shortMoney = (value: number) => value >= 1_000_000 ? `$${Number((value / 1_000_000).toFixed(2))}M` : `$${Math.round(value / 1000)}K`;
+
+// The busiest cities on the feed right now, each with a photo of a typical home for sale
+// there, plus every province with its count. All from the market summary of the last sync.
+async function TopMarkets() {
+  const market = await cachedMarket();
+  const featured = market?.featured.filter(city => city.photo) ?? [];
   return (
-    <section className="ed-section ed-communities ed-shell">
-      <SectionHeading label="OUR COMMUNITIES" title="Find your kind of Calgary." copy="Lakeside weekends, family-friendly neighbourhoods or a home close to downtown. Explore the places that fit the way you live." />
-      <div className="ed-community-grid">
-        {communities.map((c, i) => (
-          <article className={`c${i + 1}`} key={c.name}>
-            <div><Image src={`${F}${c.image}`} alt={`${c.name}, Calgary`} fill sizes="412px" /></div>
-            <small>{c.zone}</small>
-            <h3><Link href={`/search?query=${encodeURIComponent(c.name)}`}>{c.name}</Link></h3>
-            <p>{c.copy}</p>
-          </article>
+    <section className="ed-section ed-markets ed-shell" id="markets">
+      <SectionHeading label="TOP MARKETS" title="Find your place in Canada." copy="Big-city condos, family suburbs or a lakeside town. See where the homes are, what they typically cost, and jump straight into the search." />
+      <div className="ed-market-grid">
+        {featured.length ? featured.map((city, i) => (
+          <Link className={`ed-market${i === 0 ? " wide" : ""}`} href={`/search?city=${encodeURIComponent(city.city)}&province=${city.code}#listing-results`} key={`${city.city}-${city.code}`}>
+            <Image src={city.photo!} alt={`A home for sale in ${city.city}`} fill sizes={i === 0 ? "(max-width: 760px) 100vw, 640px" : "(max-width: 760px) 100vw, 320px"} />
+            <span className="shade" aria-hidden="true" />
+            <small>{city.province.toUpperCase()}</small>
+            <h3>{city.city}</h3>
+            <p>{count.format(city.count)} homes · typical {shortMoney(city.medianPrice)}</p>
+          </Link>
+        )) : fallbackMarkets.map((city, i) => (
+          <Link className={`ed-market${i === 0 ? " wide" : ""}`} href={`/search?city=${city.city}&province=${city.code}#listing-results`} key={city.city}>
+            <Image src={`${F}${city.image}`} alt="" fill sizes="420px" />
+            <span className="shade" aria-hidden="true" />
+            <small>{city.code}</small>
+            <h3>{city.city}</h3>
+            <p>Explore homes for sale</p>
+          </Link>
         ))}
       </div>
-      <div className="ed-community-links">
-        <div>
-          {cityZones.map(zone => <Link href={`/search?city=Calgary&zone=${zone}`} key={zone}>Calgary {zone}</Link>)}
-        </div>
-        <div>
-          <span>Beyond the city</span>
-          {nearbyCities.map(city => <Link href={`/search?city=${city}`} key={city}>{city} →</Link>)}
-        </div>
-      </div>
-      <Link className="ed-text-link" href="/search">Explore all communities</Link>
+      {market && market.provinces.length > 0 && <div className="ed-provinces">
+        <span>Browse by province</span>
+        {market.provinces.map(province => (
+          <Link href={`/search?province=${province.code}#listing-results`} key={province.code} title={`Typical asking price ${money.format(province.medianPrice)}`}>
+            {province.name} <b>{count.format(province.count)}</b>
+          </Link>
+        ))}
+      </div>}
+      <Link className="ed-text-link" href="/search#listing-results">Search all of Canada</Link>
     </section>
   );
+}
+
+// The original search band, with city suggestions and the provinces that have homes for sale.
+async function SearchBand() {
+  const { cities, provinces } = await searchSuggestions();
+  return <EditorialSearch cities={cities} provinces={provinces} />;
 }
 
 function Services() {
@@ -401,20 +415,19 @@ function WhyChooseUs() {
       <div className="ed-shell">
         <SectionHeading label={<p className="ed-chip"><i aria-hidden="true" />WHY CHOOSE US?</p>} title="Your goals. Our commitment." copy="Not a one-size-fits-all process. We take time to understand your priorities and help you move forward with confidence." />
         <div className="ed-landscape">
-          <Image src={`${F}why-landscape.png`} alt="Cranston, Calgary landscape" fill sizes="1360px" />
+          <Image src={`${F}why-landscape.png`} alt="Homes beside open green space" fill sizes="1360px" />
           <div className="shade" />
           <aside>
-            <h3>Local insight. Better decisions.</h3>
-            <p>From your ideal community to your next property investment, get advice that starts with what matters to you.</p>
+            <h3>National reach. Local insight.</h3>
+            <p>From your ideal community to your next property investment, anywhere in Canada, get advice that starts with what matters to you.</p>
           </aside>
           <section>
-            <h2>Rooted in Calgary. Focused on you.</h2>
+            <h2>Coast to coast. Focused on you.</h2>
             <Link href="/contact">
               <span><Image src={`${F}why-arrow.svg`} alt="" width={20} height={20} /></span>
               Plan your move with us
             </Link>
           </section>
-          <small>Cranston, southeast Calgary</small>
         </div>
         <div className="ed-values">
           {values.map(v => (
@@ -457,7 +470,7 @@ function Journal() {
         </div>
         <div>
           <small>INSIGHT / IDEAS / YOUR NEXT MOVE</small>
-          <p>A clearer perspective on buying, selling and making Calgary feel like home.</p>
+          <p>A clearer perspective on buying, selling and finding the place in Canada that feels like home.</p>
           <Link href="/services">Explore the blog →</Link>
         </div>
       </div>
@@ -482,7 +495,7 @@ function ListingUpdates() {
     <section className="ed-updates ed-shell" id="updates">
       <div>
         <h2>A new home on your radar.</h2>
-        <p>Get Calgary listing updates tailored to your search.</p>
+        <p>Get listing updates for the cities and homes you care about, anywhere in Canada.</p>
       </div>
       <form action="/contact">
         <div>
@@ -514,7 +527,7 @@ function Footer() {
             {footerLinks.map(({ label, href }) => <Link href={href} key={label}>{label}</Link>)}
           </section>
           <section>
-            <b>VISIT OR GET IN TOUCH</b>
+            <b>HEAD OFFICE · GET IN TOUCH</b>
             <address>
               <p>#700 - 1816 Crowchild Trail NW<br />Calgary, AB T2M 3Y7</p>
             </address>
@@ -522,7 +535,7 @@ function Footer() {
             <p>Monday–Friday<br />9:00 AM–6:00 PM</p>
           </section>
           <section>
-            <b>YOUR LOCAL TEAM</b>
+            <b>YOUR TEAM</b>
             <h3>Davinder Toor</h3>
             <small>Founder &amp; REALTOR® · EXP REALTY</small>
             <div className="ed-agent-phone">
@@ -561,10 +574,11 @@ export default function Home() {
       <Header />
       <main>
         <Hero />
+        <SearchBand />
         <Listings />
         <ExclusiveProperties />
         <About />
-        <Communities />
+        <TopMarkets />
         <Services />
         <WhyChooseUs />
         <PreApproval />

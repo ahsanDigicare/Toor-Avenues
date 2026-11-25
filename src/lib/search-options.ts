@@ -2,12 +2,24 @@
 // so a value chosen in one place is always recognised (and shown) in the others.
 // Every label here is understood by parseListingFilters() in ./listings.
 
+/** Provinces and territories (feed name + postal code), largest markets first. */
+export const PROVINCES: { name: string; code: string }[] = [
+  { name: "Ontario", code: "ON" }, { name: "British Columbia", code: "BC" }, { name: "Alberta", code: "AB" },
+  { name: "Quebec", code: "QC" }, { name: "Nova Scotia", code: "NS" }, { name: "New Brunswick", code: "NB" },
+  { name: "Saskatchewan", code: "SK" }, { name: "Manitoba", code: "MB" }, { name: "Newfoundland & Labrador", code: "NL" },
+  { name: "Prince Edward Island", code: "PE" }, { name: "Yukon", code: "YT" }, { name: "Northwest Territories", code: "NT" }, { name: "Nunavut", code: "NU" },
+];
+export const ANY_PROVINCE = "All of Canada";
+/** "ON" / "Ontario" → the province entry. */
+export const findProvince = (value?: string) => value ? PROVINCES.find(item => item.code === value.toUpperCase() || item.name.toLowerCase() === value.toLowerCase()) : undefined;
+
+/** Kept for links from the previous site ("Calgary NW" etc.); the pickers now choose a province. */
 export const CITY_OPTIONS = ["Any city", "Calgary", "Calgary NW", "Calgary NE", "Calgary SW", "Calgary SE", "Airdrie", "Chestermere", "Cochrane"];
-export const PRICE_OPTIONS = ["Any price", "Under $250K", "$250K–$500K", "$500K–$750K", "$750K–$1M", "$1M+"];
+export const PRICE_OPTIONS = ["Any price", "Under $400K", "$400K–$700K", "$700K–$1M", "$1M–$2M", "$2M+"];
 export const BED_OPTIONS = ["Any", "1+", "2+", "3+", "4+", "5+"];
 export const BATH_OPTIONS = ["Any", "1+", "2+", "3+", "4+"];
-export const MIN_PRICE_OPTIONS = ["No minimum", "$250,000", "$500,000", "$750,000", "$1,000,000"];
-export const MAX_PRICE_OPTIONS = ["No maximum", "$250,000", "$500,000", "$750,000", "$1,000,000", "$1,500,000"];
+export const MIN_PRICE_OPTIONS = ["No minimum", "$250,000", "$400,000", "$500,000", "$750,000", "$1,000,000", "$1,500,000", "$2,000,000"];
+export const MAX_PRICE_OPTIONS = ["No maximum", "$400,000", "$500,000", "$750,000", "$1,000,000", "$1,500,000", "$2,000,000", "$3,000,000"];
 export const YEAR_OPTIONS = ["Any year", "2020 or newer", "2010 or newer", "2000 or newer"];
 export const PROPERTY_TYPES = ["All types", "Detached", "Semi-detached", "Townhouse", "Condo", "Bungalow", "Multi-family", "Mobile", "Acreage"];
 
@@ -44,10 +56,10 @@ export const PRICE_STEPS = [
 
 export const PRICE_PRESETS = [
   { label: "Under $400K", min: 0, max: 400_000 },
-  { label: "$400K – $600K", min: 400_000, max: 600_000 },
-  { label: "$600K – $800K", min: 600_000, max: 800_000 },
-  { label: "$800K – $1M", min: 800_000, max: 1_000_000 },
-  { label: "$1M +", min: 1_000_000, max: 0 },
+  { label: "$400K – $700K", min: 400_000, max: 700_000 },
+  { label: "$700K – $1M", min: 700_000, max: 1_000_000 },
+  { label: "$1M – $2M", min: 1_000_000, max: 2_000_000 },
+  { label: "$2M +", min: 2_000_000, max: 0 },
 ];
 
 export const STATUS_CHOICES = [
@@ -87,12 +99,12 @@ export const PARKING_OPTIONS = ["Any", "1+", "2+", "3+", "4+", "5+"];
 
 /** Every search filter as form values (empty string = not set). */
 export type FilterState = {
-  query: string; city: string; status: string; min: string; max: string; beds: string; baths: string; type: string;
+  query: string; province: string; city: string; status: string; min: string; max: string; beds: string; baths: string; type: string;
   sqft: string; maxSqft: string; year: string; maxYear: string; lot: string; days: string; parking: string;
   features: string[]; text: string; fee: string;
 };
 
 export const EMPTY_FILTERS: FilterState = {
-  query: "", city: "", status: "", min: "", max: "", beds: "", baths: "", type: "", sqft: "", maxSqft: "", year: "",
+  query: "", province: "", city: "", status: "", min: "", max: "", beds: "", baths: "", type: "", sqft: "", maxSqft: "", year: "",
   maxYear: "", lot: "", days: "", parking: "", features: [], text: "", fee: "",
 };

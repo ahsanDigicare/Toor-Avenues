@@ -43,23 +43,44 @@ function cmhcPremium(price: number, down: number) {
 // SELL: home value estimator
 // ---------------------------------------------------------------------------
 
-type Community = { community: string; city: string; count: number };
+type EstimateCity = { city: string; province: string; code: string; count: number };
 const ESTIMATE_TYPES = ["Detached", "Semi-detached", "Townhouse", "Condo", "Bungalow"];
 
-export function HomeValueEstimator({ communities }: { communities: Community[] }) {
-  const [place, setPlace] = useState("");
+export function HomeValueEstimator({ cities }: { cities: EstimateCity[] }) {
+  const [place, setPlace] = useState(""); // "City|Province"
+  const [communities, setCommunities] = useState<{ community: string; count: number }[]>([]);
+  const [community, setCommunity] = useState("");
   const [type, setType] = useState("Detached");
   const [beds, setBeds] = useState(3);
   const [sqft, setSqft] = useState(1600);
   const [result, setResult] = useState<ValueEstimate | null | "none">(null);
   const [busy, setBusy] = useState(false);
+  const [city, province] = place.split("|");
+
+  // Cities grouped by province (busiest provinces and cities first).
+  const groups = useMemo(() => {
+    const byProvince = new Map<string, EstimateCity[]>();
+    for (const item of cities) byProvince.set(item.province, [...(byProvince.get(item.province) ?? []), item]);
+    return [...byProvince].map(([name, list]) => ({ name, list: [...list].sort((a, b) => a.city.localeCompare(b.city)) }));
+  }, [cities]);
+
+  // Communities of the chosen city, loaded when the city changes.
+  useEffect(() => {
+    if (!city) return;
+    const controller = new AbortController();
+    fetch(`/api/market/communities?${new URLSearchParams({ city, province })}`, { signal: controller.signal })
+      .then(response => response.ok ? response.json() : { communities: [] })
+      .then((data: { communities: { community: string; count: number }[] }) => setCommunities(data.communities ?? []))
+      .catch(() => { /* aborted or offline: keep the list empty */ });
+    return () => controller.abort();
+  }, [city, province]);
+
+  const choosePlace = (value: string) => { setPlace(value); setCommunity(""); setCommunities([]); setResult(null); };
 
   const run = async (event: React.FormEvent) => {
     event.preventDefault();
-    const [community, city] = place.split("|");
-    const params = new URLSearchParams({ type, beds: String(beds), sqft: String(sqft) });
+    const params = new URLSearchParams({ type, beds: String(beds), sqft: String(sqft), city, province });
     if (community) params.set("community", community);
-    if (city) params.set("city", city);
     setBusy(true);
     try {
       const response = await fetch(`/api/market/estimate?${params}`);
@@ -69,15 +90,23 @@ export function HomeValueEstimator({ communities }: { communities: Community[] }
     setBusy(false);
   };
 
-  const [community] = place.split("|");
-  const contact = `/contact?interest=home-value${community ? `&community=${encodeURIComponent(community)}` : ""}`;
+  const where = community || city;
+  const contact = `/contact?interest=home-value${where ? `&community=${encodeURIComponent(where)}` : ""}`;
 
   return <div className="mt-card mt-estimator">
     <form className="mt-estimator-form" onSubmit={run}>
-      <label className="mt-field mt-wide"><span>Community</span>
-        <select value={place} onChange={event => setPlace(event.target.value)} required>
-          <option value="">Choose your community…</option>
-          {communities.map(item => <option key={`${item.community}|${item.city}`} value={`${item.community}|${item.city}`}>{item.community}{item.city !== "Calgary" ? ` · ${item.city}` : ""}</option>)}
+      <label className="mt-field"><span>City</span>
+        <select value={place} onChange={event => choosePlace(event.target.value)} required>
+          <option value="">Choose your city…</option>
+          {groups.map(group => <optgroup label={group.name} key={group.name}>
+            {group.list.map(item => <option key={`${item.city}|${item.province}`} value={`${item.city}|${item.province}`}>{item.city}</option>)}
+          </optgroup>)}
+        </select>
+      </label>
+      <label className="mt-field"><span>Community <small>(optional)</small></span>
+        <select value={community} onChange={event => setCommunity(event.target.value)} disabled={!city || !communities.length}>
+          <option value="">{city ? "Whole city" : "Choose a city first"}</option>
+          {communities.map(item => <option key={item.community} value={item.community}>{item.community}</option>)}
         </select>
       </label>
       <label className="mt-field"><span>Home type</span>
@@ -86,14 +115,14 @@ export function HomeValueEstimator({ communities }: { communities: Community[] }
       <label className="mt-field"><span>Bedrooms</span>
         <select value={beds} onChange={event => setBeds(Number(event.target.value))}>{[1, 2, 3, 4, 5, 6].map(option => <option key={option} value={option}>{option}{option === 6 ? "+" : ""}</option>)}</select>
       </label>
-      <label className="mt-field"><span>Size (sq ft above grade)</span>
+      <label className="mt-field mt-wide"><span>Size (sq ft above grade)</span>
         <input type="number" min={300} max={15000} step={50} value={sqft} onChange={event => setSqft(Number(event.target.value))} />
       </label>
       <button className="mt-primary" type="submit" disabled={busy}>{busy ? "Estimating…" : "Estimate my home value"}</button>
     </form>
 
     <div className="mt-estimate-result" aria-live="polite">
-      {result === null && <div className="mt-empty"><b>Your estimate appears here</b><span>Based on comparable homes for sale right now in your community.</span></div>}
+      {result === null && <div className="mt-empty"><b>Your estimate appears here</b><span>Based on comparable homes for sale right now in your city or community.</span></div>}
       {result === "none" && <div className="mt-empty"><b>Not enough comparable homes right now</b><span>We will prepare a detailed evaluation from recent sales instead.</span><Link className="mt-primary" href={contact}>Request a free evaluation</Link></div>}
       {result && result !== "none" && <>
         <p className="mt-kicker">ESTIMATED MARKET RANGE</p>
@@ -233,19 +262,98 @@ export function AffordabilityCalculator() {
 }
 
 // ---------------------------------------------------------------------------
-// BUY: Alberta closing costs
+// BUY: closing costs by province (land transfer tax / registration fees)
 // ---------------------------------------------------------------------------
 
-export function ClosingCostEstimator({ defaultPrice = 550_000 }: { defaultPrice?: number }) {
+/** Tax on `price` from [upTo, rate] brackets (the last bracket's upTo is Infinity). */
+function bracketTax(price: number, brackets: [number, number][]) {
+  let tax = 0, from = 0;
+  for (const [upTo, rate] of brackets) {
+    if (price > from) tax += (Math.min(price, upTo) - from) * rate;
+    from = upTo;
+  }
+  return Math.round(tax);
+}
+
+const ON_BRACKETS: [number, number][] = [[55_000, 0.005], [250_000, 0.01], [400_000, 0.015], [2_000_000, 0.02], [Infinity, 0.025]];
+const TORONTO_BRACKETS: [number, number][] = [[55_000, 0.005], [250_000, 0.01], [400_000, 0.015], [2_000_000, 0.02], [3_000_000, 0.025],
+  [4_000_000, 0.035], [5_000_000, 0.045], [10_000_000, 0.055], [20_000_000, 0.065], [Infinity, 0.075]];
+const BC_BRACKETS: [number, number][] = [[200_000, 0.01], [2_000_000, 0.02], [3_000_000, 0.03], [Infinity, 0.05]];
+const MB_BRACKETS: [number, number][] = [[30_000, 0], [90_000, 0.005], [150_000, 0.01], [200_000, 0.015], [Infinity, 0.02]];
+const QC_BRACKETS: [number, number][] = [[61_500, 0.005], [307_800, 0.01], [Infinity, 0.015]];
+const titleFee = (value: number) => value ? 50 + Math.ceil(value / 5000) * 5 : 0; // Alberta land titles
+
+type ClosingTax = { rows: [string, number][]; note: string; firstTimeHelp: boolean; torontoOption: boolean };
+
+/** Government taxes and registration fees for a purchase (approximate; rates as published for 2025). */
+function closingTaxes(code: string, price: number, mortgage: number, firstTime: boolean, toronto: boolean): ClosingTax {
+  switch (code) {
+    case "ON": {
+      const provincial = bracketTax(price, ON_BRACKETS);
+      const rows: [string, number][] = [["Ontario land transfer tax", provincial]];
+      if (firstTime) rows.push(["First-time buyer refund (Ontario)", -Math.min(4_000, provincial)]);
+      if (toronto) {
+        const municipal = bracketTax(price, TORONTO_BRACKETS);
+        rows.push(["Toronto municipal land transfer tax", municipal]);
+        if (firstTime) rows.push(["First-time buyer rebate (Toronto)", -Math.min(4_475, municipal)]);
+      }
+      rows.push(["Registration fees", 160]);
+      return { rows, note: "Ontario land transfer tax applies province-wide; buyers in the City of Toronto pay a second, municipal tax.", firstTimeHelp: true, torontoOption: true };
+    }
+    case "BC": {
+      const tax = bracketTax(price, BC_BRACKETS);
+      // First-time buyers: no tax on the first $500,000 up to $835,000, phasing out by $860,000.
+      const exemption = !firstTime ? 0 : price <= 835_000 ? Math.min(tax, 8_000) : price < 860_000 ? Math.round(8_000 * (860_000 - price) / 25_000) : 0;
+      const rows: [string, number][] = [["BC property transfer tax", tax]];
+      if (exemption) rows.push(["First-time buyer exemption", -exemption]);
+      rows.push(["Land title registration fees", 230]);
+      return { rows, note: "BC property transfer tax: 1% to $200,000, 2% to $2M, 3% to $3M, 5% above. Newly built homes can qualify for further exemptions.", firstTimeHelp: true, torontoOption: false };
+    }
+    case "AB":
+      return { rows: [["Land title transfer fee", titleFee(price)], ["Mortgage registration fee", titleFee(mortgage)]],
+        note: "Alberta has no land transfer tax: land titles fees are $50 + $5 per $5,000 of value.", firstTimeHelp: false, torontoOption: false };
+    case "SK":
+      return { rows: [["Land titles transfer fee", Math.round(Math.max(0, price - 6_300) * 0.004)], ["Mortgage registration", mortgage ? 200 : 0]],
+        note: "Saskatchewan has no land transfer tax: the title transfer fee is about 0.4% of the value over $6,300.", firstTimeHelp: false, torontoOption: false };
+    case "MB":
+      return { rows: [["Manitoba land transfer tax", bracketTax(price, MB_BRACKETS)], ["Registration fees", 140]],
+        note: "Manitoba land transfer tax: 0% to $30,000, then 0.5%–2% in steps.", firstTimeHelp: false, torontoOption: false };
+    case "QC":
+      return { rows: [["Welcome tax (transfer duties)", bracketTax(price, QC_BRACKETS)], ["Notary & registration", 1_500]],
+        note: "Quebec's welcome tax uses indexed brackets; Montreal adds higher rates above about $500,000.", firstTimeHelp: false, torontoOption: false };
+    case "NB":
+      return { rows: [["Real property transfer tax (1%)", Math.round(price * 0.01)], ["Registration fees", 100]],
+        note: "New Brunswick charges 1% of the greater of the price and the assessed value.", firstTimeHelp: false, torontoOption: false };
+    case "NS":
+      return { rows: [["Deed transfer tax (about 1.5%)", Math.round(price * 0.015)], ["Registration fees", 100]],
+        note: "Nova Scotia deed transfer tax is set by each municipality (up to 1.5%; Halifax charges 1.5%).", firstTimeHelp: false, torontoOption: false };
+    case "PE": {
+      const tax = Math.round(price * 0.01);
+      return { rows: [["Real property transfer tax (1%)", tax], ...(firstTime ? [["First-time buyer exemption", -tax] as [string, number]] : []), ["Registration fees", 100]],
+        note: "PEI charges 1% of the greater of the price and the assessed value; first-time buyers are exempt.", firstTimeHelp: true, torontoOption: false };
+    }
+    case "NL":
+      return { rows: [["Deed registration", Math.round(100 + Math.max(0, price - 500) * 0.004)], ["Mortgage registration", mortgage ? Math.round(100 + Math.max(0, mortgage - 500) * 0.004) : 0]],
+        note: "Newfoundland and Labrador has no land transfer tax: registration fees are $100 + 0.4% of the value over $500.", firstTimeHelp: false, torontoOption: false };
+    default:
+      return { rows: [["Land titles registration (approx.)", 250]], note: "Territorial land titles fees are small flat or value-based charges.", firstTimeHelp: false, torontoOption: false };
+  }
+}
+
+const CLOSING_PROVINCES: [string, string][] = [["ON", "Ontario"], ["BC", "British Columbia"], ["AB", "Alberta"], ["QC", "Quebec"], ["NS", "Nova Scotia"],
+  ["NB", "New Brunswick"], ["SK", "Saskatchewan"], ["MB", "Manitoba"], ["NL", "Newfoundland & Labrador"], ["PE", "Prince Edward Island"], ["YT", "Yukon"], ["NT", "Northwest Territories"], ["NU", "Nunavut"]];
+
+export function ClosingCostEstimator({ defaultPrice = 650_000 }: { defaultPrice?: number }) {
   const [price, setPrice] = useState(defaultPrice);
   const [down, setDown] = useState(Math.round(defaultPrice * 0.1));
+  const [province, setProvince] = useState("ON");
+  const [firstTime, setFirstTime] = useState(false);
+  const [toronto, setToronto] = useState(false);
   const mortgage = Math.max(0, price - down);
-  const titleFee = price ? 50 + Math.ceil(price / 5000) * 5 : 0;
-  const mortgageFee = mortgage ? 50 + Math.ceil(mortgage / 5000) * 5 : 0;
+  const taxes = closingTaxes(province, price, mortgage, firstTime, toronto);
   const rows: [string, number][] = [
-    ["Land title transfer fee", titleFee],
-    ["Mortgage registration fee", mortgageFee],
-    ["Legal fees & disbursements", 1_500],
+    ...taxes.rows,
+    ["Legal fees & disbursements", province === "ON" || province === "BC" ? 2_000 : 1_500],
     ["Home inspection", 550],
     ["Title insurance", 300],
     ["Appraisal (if your lender requires one)", 350],
@@ -253,16 +361,23 @@ export function ClosingCostEstimator({ defaultPrice = 550_000 }: { defaultPrice?
   const total = rows.reduce((sum, [, value]) => sum + value, 0);
   return <div className="mt-card mt-split">
     <div className="mt-inputs">
+      <label className="mt-field"><span>Province or territory</span>
+        <select value={province} onChange={event => { setProvince(event.target.value); setToronto(false); }}>
+          {CLOSING_PROVINCES.map(([code, name]) => <option key={code} value={code}>{name}</option>)}
+        </select>
+      </label>
       <MoneyInput label="Purchase price" value={price} onChange={setPrice} />
       <MoneyInput label="Down payment" value={down} onChange={setDown} />
-      <p className="mt-callout"><b>Good news:</b> Alberta has no land transfer tax, so closing costs here are among the lowest in Canada.</p>
+      {taxes.firstTimeHelp && <label className="mt-check"><input type="checkbox" checked={firstTime} onChange={event => setFirstTime(event.target.checked)} /> First-time home buyer</label>}
+      {taxes.torontoOption && <label className="mt-check"><input type="checkbox" checked={toronto} onChange={event => setToronto(event.target.checked)} /> Buying in the City of Toronto</label>}
+      <p className="mt-callout">{taxes.note}</p>
     </div>
     <div className="mt-output">
       <p className="mt-kicker">ESTIMATED CLOSING COSTS</p>
       <p className="mt-big">{money.format(total)}</p>
       <p className="mt-sub">About {price ? (total / price * 100).toFixed(2) : "0"}% of the purchase price, plus property tax and utility adjustments.</p>
-      <dl className="mt-rows">{rows.map(([label, value]) => <div key={label}><dt>{label}</dt><dd>{money.format(value)}</dd></div>)}</dl>
-      <small className="mt-note">Land titles fees: $50 + $5 per $5,000 of value. Professional fees are typical ranges and vary by provider.</small>
+      <dl className="mt-rows">{rows.map(([label, value]) => <div key={label}><dt>{label}</dt><dd>{value < 0 ? `−${money.format(-value)}` : money.format(value)}</dd></div>)}</dl>
+      <small className="mt-note">Government taxes and fees are estimates from published provincial rates; your lawyer or notary confirms the exact amounts. Professional fees are typical ranges.</small>
     </div>
   </div>;
 }

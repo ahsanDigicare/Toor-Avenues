@@ -2,24 +2,23 @@
 
 import Form from "next/form";
 import Link from "next/link";
-import { useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
+import { useEffect, useId, useMemo, useRef, useState, useSyncExternalStore } from "react";
 import { createPortal } from "react-dom";
-import { parseSmartSearch } from "../lib/smart-search";
 import {
-  BATH_OPTIONS, BED_OPTIONS, CITY_OPTIONS, DAY_STEPS, FEATURE_CHOICES, FEE_STEPS, LOT_STEPS, PARKING_OPTIONS,
+  ANY_PROVINCE, BATH_OPTIONS, BED_OPTIONS, DAY_STEPS, PROVINCES, findProvince, FEATURE_CHOICES, FEE_STEPS, LOT_STEPS, PARKING_OPTIONS,
   PRICE_PRESETS, PRICE_STEPS, SQFT_STEPS, STATUS_CHOICES, TYPE_CHOICES, YEAR_STEPS, priceRangeLabel, EMPTY_FILTERS, type FilterState,
 } from "../lib/search-options";
 
 // ---------------------------------------------------------------------------
-// Smart search: describe the home in plain English (parsed live into filters),
-// one-tap quick picks, refine pills that open detailed panels, and a live,
-// rolling count of matching homes.
+// Search page filter in the ToorAvenues search style: city, community, price,
+// beds, baths and home type in one row, a live count on the button, and
+// "More filters" for everything else.
 // ---------------------------------------------------------------------------
 
 export type { FilterState };
 export { EMPTY_FILTERS };
 
-export type Panel = "status" | "price" | "rooms" | "type" | "more";
+export type Panel = "province" | "price" | "beds" | "baths" | "type" | "more";
 
 const money = new Intl.NumberFormat("en-CA", { style: "currency", currency: "CAD", maximumFractionDigits: 0 });
 const count = new Intl.NumberFormat("en-CA");
@@ -39,7 +38,6 @@ export function toParams(state: FilterState, hidden: Record<string, string>) {
 // --- Icons -------------------------------------------------------------------
 
 export const icon = (path: React.ReactNode, size = 18) => <svg viewBox="0 0 24 24" width={size} height={size} fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">{path}</svg>;
-const SearchIcon = () => icon(<><circle cx="11" cy="11" r="7" /><path d="m20 20-3.5-3.5" /></>);
 const SlidersIcon = () => icon(<><path d="M4 7h10M18 7h2M4 17h4M12 17h8" /><circle cx="16" cy="7" r="2" /><circle cx="10" cy="17" r="2" /></>);
 const Chevron = () => <svg className="lf-chevron" viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="m6 9 6 6 6-6" /></svg>;
 const TYPE_ICONS: Record<string, React.ReactNode> = {
@@ -196,8 +194,6 @@ export const pickIsOn = (state: FilterState, patch: Partial<FilterState>) => Obj
   const current = state[key as keyof FilterState];
   return Array.isArray(value) ? value.every(item => (current as string[]).includes(item)) : current === value;
 });
-const pickOff = (state: FilterState, patch: Partial<FilterState>): Partial<FilterState> => Object.fromEntries(Object.entries(patch).map(([key, value]) =>
-  [key, Array.isArray(value) ? (state[key as keyof FilterState] as string[]).filter(item => !value.includes(item)) : ""]));
 export const merge = (state: FilterState, patch: Partial<FilterState>): FilterState => ({
   ...state, ...patch, features: patch.features ? [...new Set([...state.features, ...patch.features])] : state.features,
 });
@@ -226,30 +222,47 @@ export function useRollingNumber(target: number | null) {
   return target === null ? null : shown;
 }
 
-export function ListingFilter({ initial = EMPTY_FILTERS, hidden = {}, priceBins = [], initialTotal = null, initialPanel = null }: {
-  initial?: FilterState; hidden?: Record<string, string>; priceBins?: number[]; initialTotal?: number | null; initialPanel?: Panel | null;
+type Option = { value: string; label: string };
+
+/** Underlined dropdown field in the ToorAvenues search style (label above, value below). */
+function FieldDropdown({ id, label, value, options, open, onToggle, onChange }: {
+  id: Panel; label: string; value: string; options: Option[]; open: boolean; onToggle: (panel: Panel) => void; onChange: (value: string) => void;
 }) {
+  const current = options.find(option => option.value === value) ?? options[0];
+  return <div className={`lfc-field lfc-dropdown${open ? " is-open" : ""}`}>
+    <span className="lfc-label">{label}</span>
+    <button type="button" className="lfc-trigger" aria-haspopup="listbox" aria-expanded={open} aria-label={`${label}: ${current.label}`} onClick={() => onToggle(id)}>
+      <span>{current.label}</span><i aria-hidden="true"><Chevron /></i>
+    </button>
+    {open && <div className="lfc-menu" role="listbox" aria-label={`${label} options`}>
+      {options.map(option => <button type="button" role="option" aria-selected={option.value === current.value} key={option.value} onClick={() => onChange(option.value)}>{option.label}</button>)}
+    </div>}
+  </div>;
+}
+
+const plusChoices = (options: string[]): Option[] => options.map(option => ({ value: option === "Any" ? "" : option.replace("+", ""), label: option }));
+const BED_CHOICES = plusChoices(BED_OPTIONS);
+const BATH_CHOICES = plusChoices(BATH_OPTIONS);
+const TYPE_OPTIONS: Option[] = [{ value: "", label: "Any type" }, ...TYPE_CHOICES.map(choice => ({ value: choice.value, label: choice.title }))];
+
+export function ListingFilter({ initial = EMPTY_FILTERS, hidden = {}, priceBins = [], initialTotal = null, initialPanel = null, cities = [], provinces }: {
+  initial?: FilterState; hidden?: Record<string, string>; priceBins?: number[]; initialTotal?: number | null; initialPanel?: Panel | null;
+  /** City suggestions for the search box ("Toronto, ON"). */ cities?: string[];
+  /** Provinces that have homes for sale (all are offered when not given). */ provinces?: string[];
+}) {
+  const listId = useId();
+  const provinceChoices: Option[] = [{ value: "", label: ANY_PROVINCE },
+    ...(provinces?.length ? PROVINCES.filter(item => provinces.includes(item.name)) : PROVINCES).map(item => ({ value: item.code, label: item.name }))];
   const [state, setState] = useState(initial);
-  const [draft, setDraft] = useState(initial.query);
   const [open, setOpen] = useState<Panel | null>(initialPanel);
   const [total, setTotal] = useState<number | null>(initialTotal);
-  const [example, setExample] = useState(0);
-  const [focused, setFocused] = useState(false);
-  // The "All filters" window is portalled to <body>, which only exists in the browser.
+  // The "More filters" window is portalled to <body>, which only exists in the browser.
   const mounted = useSyncExternalStore(subscribeNothing, () => true, () => false);
   const form = useRef<HTMLFormElement>(null);
   const bar = useRef<HTMLDivElement>(null);
 
-  // What the smart box understands right now, merged over the structured filters.
-  const smart = useMemo(() => parseSmartSearch(draft), [draft]);
-  // Changing a panel takes over from the typed text: what was understood becomes
-  // regular filters and only the location words stay in the box.
-  const set = (patch: Partial<FilterState>) => {
-    setState(current => ({ ...merge(current, smart.patch), ...patch }));
-    if (smart.tokens.length) setDraft(smart.rest);
-  };
-  const effective = useMemo(() => ({ ...merge(state, smart.patch), query: smart.rest }), [state, smart]);
-  const params = useMemo(() => toParams(effective, hidden), [effective, hidden]);
+  const set = (patch: Partial<FilterState>) => setState(current => ({ ...current, ...patch }));
+  const params = useMemo(() => toParams(state, hidden), [state, hidden]);
   const query = params.toString();
   const rolling = useRollingNumber(total);
 
@@ -265,14 +278,7 @@ export function ListingFilter({ initial = EMPTY_FILTERS, hidden = {}, priceBins 
     return () => { window.clearTimeout(timer); controller.abort(); };
   }, [query]);
 
-  // Cycle the example searches while the box is empty.
-  useEffect(() => {
-    if (draft || focused) return;
-    const timer = window.setInterval(() => setExample(current => (current + 1) % EXAMPLES.length), 3200);
-    return () => window.clearInterval(timer);
-  }, [draft, focused]);
-
-  // Close panels on outside click and Escape; lock page scroll while "All filters" is open.
+  // Close menus on outside click and Escape; lock page scroll while "More filters" is open.
   useEffect(() => {
     if (!open) return;
     const onPointer = (event: PointerEvent) => { if (open !== "more" && !bar.current?.contains(event.target as Node)) setOpen(null); };
@@ -290,27 +296,18 @@ export function ListingFilter({ initial = EMPTY_FILTERS, hidden = {}, priceBins 
 
   const submit = () => { setOpen(null); window.setTimeout(() => form.current?.requestSubmit(), 0); };
   const toggle = (panel: Panel) => setOpen(current => current === panel ? null : panel);
-  // Applying a quick pick searches straight away.
-  const quickPick = (patch: Partial<FilterState>) => {
-    setState(current => pickIsOn(merge(current, smart.patch), patch) ? { ...merge(current, smart.patch), ...pickOff(merge(current, smart.patch), patch) } : merge(merge(current, smart.patch), patch));
-    setDraft(smart.rest);
-    submit();
-  };
+  // Picking from a dropdown closes it; the search runs when the visitor presses the button.
+  const choose = (patch: Partial<FilterState>) => { set(patch); setOpen(null); };
 
-  // Refine pill summaries (from the effective filters, so typed criteria show up too).
-  const e = effective;
-  const status = STATUS_CHOICES.find(choice => choice.value === e.status);
-  const priceText = e.min || e.max ? priceRangeLabel(Number(e.min) || undefined, Number(e.max) || undefined) : "";
-  const roomsText = [e.beds && `${e.beds}+ bd`, e.baths && `${e.baths}+ ba`].filter(Boolean).join(" · ");
-  const typeChoice = TYPE_CHOICES.find(choice => choice.value.toLowerCase() === state.type.toLowerCase());
-  const shownType = TYPE_CHOICES.find(choice => choice.value.toLowerCase() === e.type.toLowerCase());
-  const moreKeys: (keyof FilterState)[] = ["city", "sqft", "maxSqft", "year", "maxYear", "lot", "days", "parking", "text", "fee"];
-  const moreCount = moreKeys.filter(key => e[key]).length + e.features.length;
+  const priceText = state.min || state.max ? priceRangeLabel(Number(state.min) || undefined, Number(state.max) || undefined) : "Any price";
+  const moreKeys: (keyof FilterState)[] = ["status", "sqft", "maxSqft", "year", "maxYear", "lot", "days", "parking", "text", "fee"];
+  const moreCount = moreKeys.filter(key => state[key]).length + state.features.length;
 
   // Chips describe the filters already applied (the page's URL), each removable.
   const chips: Chip[] = [];
   const a = initial;
   if (a.query) chips.push({ label: `“${a.query}”`, remove: { query: "" } });
+  if (a.province) chips.push({ label: findProvince(a.province)?.name ?? a.province, remove: { province: "" } });
   if (a.city) chips.push({ label: a.city, remove: { city: "" } });
   if (a.status) chips.push({ label: STATUS_CHOICES.find(choice => choice.value === a.status)?.title ?? a.status, remove: { status: "" } });
   if (a.min || a.max) chips.push({ label: priceRangeLabel(Number(a.min) || undefined, Number(a.max) || undefined), remove: { min: "", max: "" } });
@@ -338,119 +335,70 @@ export function ListingFilter({ initial = EMPTY_FILTERS, hidden = {}, priceBins 
   const mapParams = new URLSearchParams(toParams(a, hidden));
   mapParams.set("view", "map");
 
-  const pill = (panel: Panel, label: string, value: string) => <button type="button" className={`lf-pill${value ? " is-set" : ""}`} aria-expanded={open === panel} aria-haspopup="dialog" onClick={() => toggle(panel)}>
-    <span>{label}</span>{value && <b>{value}</b>}<Chevron />
-  </button>;
-
-  return <Form ref={form} action="/search" scroll={false} className="listing-filter smart-filter shell" onSubmit={() => { setState(effective); setDraft(smart.rest); }}>
+  return <Form ref={form} action="/search" scroll={false} className="listing-filter lfc shell">
     {[...params.entries()].map(([key, value]) => <input type="hidden" name={key} value={value} key={key} />)}
 
-    <div className="sf-head">
-      <p><span className="sf-spark" aria-hidden="true">✦</span> SMART SEARCH</p>
+    <div className="lfc-title">
+      <h2>Search homes across Canada</h2>
       <Link href={`/search?${mapParams}#listing-results`} scroll={false}>Map view →</Link>
     </div>
 
-    <div className="sf-search">
-      <label className="sf-input">
-        <SearchIcon />
-        <span className="sf-field">
-          <input value={draft} onChange={event => setDraft(event.target.value)} onFocus={() => setFocused(true)} onBlur={() => setFocused(false)}
-            aria-label="Describe the home you want, or search a community, address or MLS® number" autoComplete="off" spellCheck={false} />
-          {!draft && <span className="sf-example" key={example} aria-hidden="true">{focused ? "Try: " : ""}{EXAMPLES[example]}</span>}
-        </span>
-        {draft && <button type="button" className="sf-clear" aria-label="Clear search" onClick={() => setDraft("")}>×</button>}
+    <div className="lfc-fields" ref={bar}>
+      <FieldDropdown id="province" label="PROVINCE" value={findProvince(state.province)?.code ?? ""} options={provinceChoices} open={open === "province"} onToggle={toggle} onChange={province => choose({ province })} />
+      <label className="lfc-field lfc-wide">
+        <span className="lfc-label">CITY, COMMUNITY, ADDRESS OR MLS®</span>
+        <input value={state.query} onChange={event => set({ query: event.target.value })} placeholder="Toronto, Kitsilano, 123 Main St…" autoComplete="off" spellCheck={false} list={listId} />
+        <datalist id={listId}>{cities.map(city => <option value={city} key={city} />)}</datalist>
       </label>
-      <button type="submit" className="sf-go" aria-live="polite">
-        <span className="sf-go-count">{rolling === null ? "Search" : count.format(rolling)}</span>
-        <span className="sf-go-label">{rolling === null ? "homes" : `${rolling === 1 ? "home" : "homes"} · show me`}</span>
-        <i aria-hidden="true">→</i>
+      <div className={`lfc-field lfc-dropdown${open === "price" ? " is-open" : ""}`}>
+        <span className="lfc-label">PRICE RANGE</span>
+        <button type="button" className="lfc-trigger" aria-haspopup="dialog" aria-expanded={open === "price"} onClick={() => toggle("price")}>
+          <span>{priceText}</span><i aria-hidden="true"><Chevron /></i>
+        </button>
+        {open === "price" && <div className="lf-panel lf-panel-wide lfc-price" role="dialog" aria-label="Price">
+          <PricePicker state={state} set={set} bins={priceBins} />
+          <PanelFooter onReset={() => set({ min: "", max: "" })} onApply={() => setOpen(null)} applyLabel="Done" />
+        </div>}
+      </div>
+      <FieldDropdown id="beds" label="BEDS" value={state.beds} options={BED_CHOICES} open={open === "beds"} onToggle={toggle} onChange={beds => choose({ beds })} />
+      <FieldDropdown id="baths" label="BATHS" value={state.baths} options={BATH_CHOICES} open={open === "baths"} onToggle={toggle} onChange={baths => choose({ baths })} />
+      <FieldDropdown id="type" label="HOME TYPE" value={TYPE_OPTIONS.find(option => option.value.toLowerCase() === state.type.toLowerCase())?.value ?? ""} options={TYPE_OPTIONS} open={open === "type"} onToggle={toggle} onChange={type => choose({ type })} />
+      <button type="submit" className="lfc-submit" aria-live="polite">{rolling === null ? "Search homes" : `Show ${count.format(rolling)} ${rolling === 1 ? "home" : "homes"}`}</button>
+    </div>
+
+    <div className="lfc-foot">
+      <button type="button" className="lfc-more" aria-haspopup="dialog" aria-expanded={open === "more"} onClick={() => toggle("more")}>
+        <SlidersIcon /> More filters{moreCount > 0 && <b>{moreCount}</b>}
       </button>
-    </div>
-
-    <div className="sf-understood" aria-live="polite">
-      {smart.tokens.length || smart.rest ? <>
-        <span>Understood:</span>
-        {smart.rest && <em className="sf-token area">📍 {smart.rest}</em>}
-        {smart.tokens.map(token => <em className={`sf-token ${token.kind}`} key={token.label}>{token.label}</em>)}
-      </> : <span>Describe the home you want in your own words — beds, budget, area, features — or pick a starting point below.</span>}
-    </div>
-
-    <div className="sf-picks" role="group" aria-label="Quick picks">
-      {QUICK_PICKS.map(pick => <button type="button" key={pick.title} aria-pressed={pickIsOn(effective, pick.patch)} onClick={() => quickPick(pick.patch)}>
-        <i>{icon(pick.icon, 20)}</i><span><b>{pick.title}</b><small>{pick.copy}</small></span>
-      </button>)}
-    </div>
-
-    <div className="sf-refine" ref={bar}>
-      <span className="sf-refine-label">Refine</span>
-      <div className="lf-slot">
-        {pill("price", "Price", priceText)}
-        {open === "price" && <div className="lf-panel lf-panel-wide" role="dialog" aria-label="Price">
-          <PricePicker state={effective} set={set} bins={priceBins} />
-          <PanelFooter onReset={() => set({ min: "", max: "" })} onApply={submit} />
-        </div>}
-      </div>
-      <div className="lf-slot">
-        {pill("rooms", "Beds & baths", roomsText)}
-        {open === "rooms" && <div className="lf-panel lf-panel-wide" role="dialog" aria-label="Beds and baths">
-          <Pills label="Beds" hint="Minimum number of bedrooms" options={BED_OPTIONS} value={effective.beds} onChange={beds => set({ beds })} />
-          <Pills label="Baths" hint="Minimum number of bathrooms" options={BATH_OPTIONS} value={effective.baths} onChange={baths => set({ baths })} />
-          <PanelFooter onReset={() => set({ beds: "", baths: "" })} onApply={submit} />
-        </div>}
-      </div>
-      <div className="lf-slot">
-        {pill("type", "Home type", shownType?.title ?? "")}
-        {open === "type" && <div className="lf-panel lf-panel-types" role="dialog" aria-label="Property type">
-          <div className="lf-type-grid">
-            {TYPE_CHOICES.map(choice => <button type="button" role="radio" aria-checked={shownType === choice} key={choice.value} onClick={() => set({ type: typeChoice === choice ? "" : choice.value })}>
-              <i>{icon(TYPE_ICONS[choice.icon], 20)}</i><span><b>{choice.title}</b><small>{choice.copy}</small></span>
-            </button>)}
-          </div>
-          <PanelFooter onReset={() => set({ type: "" })} onApply={submit} />
-        </div>}
-      </div>
-      <div className="lf-slot">
-        {pill("status", "Status", status?.value ? status.title : "")}
-        {open === "status" && <div className="lf-panel" role="dialog" aria-label="Listing status">
-          <div className="lf-option-list">
-            {STATUS_CHOICES.map(choice => <button type="button" role="radio" aria-checked={effective.status === choice.value} key={choice.value} onClick={() => set({ status: choice.value })}>
-              <i aria-hidden="true" /><span><b>{choice.title}</b><small>{choice.copy}</small></span>
-            </button>)}
-          </div>
-          <PanelFooter onReset={() => set({ status: "" })} onApply={submit} />
-        </div>}
-      </div>
-      <button type="button" className={`lf-pill sf-all${moreCount ? " is-set" : ""}`} aria-expanded={open === "more"} aria-haspopup="dialog" onClick={() => toggle("more")}>
-        <SlidersIcon /><span>All filters</span>{moreCount > 0 && <b>{moreCount}</b>}
-      </button>
+      <Link href="/contact">Can’t find it? Ask our team →</Link>
     </div>
 
     {/* Rendered at the end of <body> (still inside the form for React) so no page layer can cover it. */}
     {open === "more" && mounted && createPortal(<div className="lf-modal-backdrop" onPointerDown={event => { if (event.target === event.currentTarget) setOpen(null); }}>
       <div className="lf-modal" role="dialog" aria-modal="true" aria-labelledby="lf-modal-title">
         <header>
-          <div><h2 id="lf-modal-title">All filters</h2><p>Fine-tune your Calgary home search</p></div>
+          <div><h2 id="lf-modal-title">More filters</h2><p>Fine-tune your home search</p></div>
           <button type="button" aria-label="Close filters" onClick={() => setOpen(null)}>×</button>
         </header>
         <div className="lf-modal-body">
           <section>
+            <h3>Listing status</h3>
+            <div className="lf-option-list">
+              {STATUS_CHOICES.map(choice => <button type="button" role="radio" aria-checked={state.status === choice.value} key={choice.value} onClick={() => set({ status: choice.value })}>
+                <i aria-hidden="true" /><span><b>{choice.title}</b><small>{choice.copy}</small></span>
+              </button>)}
+            </div>
             <h3>Property details</h3>
-            <label className="lf-field"><span>Area</span>
-              <select value={effective.city} onChange={event => set({ city: event.target.value })}>
-                <option value="">Calgary &amp; surrounding areas</option>
-                {CITY_OPTIONS.slice(1).map(option => <option key={option} value={option}>{option}</option>)}
-              </select>
-            </label>
-            <RangeSelect label="Square feet" options={SQFT_STEPS} min={effective.sqft} max={effective.maxSqft} onMin={sqft => set({ sqft })} onMax={maxSqft => set({ maxSqft })} format={value => count.format(value)} />
+            <RangeSelect label="Square feet" options={SQFT_STEPS} min={state.sqft} max={state.maxSqft} onMin={sqft => set({ sqft })} onMax={maxSqft => set({ maxSqft })} format={value => count.format(value)} />
             <label className="lf-field"><span>Lot size</span>
-              <select value={effective.lot} onChange={event => set({ lot: event.target.value })}>
+              <select value={state.lot} onChange={event => set({ lot: event.target.value })}>
                 <option value="">Any lot size</option>
                 {LOT_STEPS.map(option => <option key={option} value={option}>{option}+ {option === 1 ? "acre" : "acres"}</option>)}
               </select>
             </label>
-            <RangeSelect label="Year built" options={YEAR_STEPS} min={effective.year} max={effective.maxYear} onMin={year => set({ year })} onMax={maxYear => set({ maxYear })} format={String} />
+            <RangeSelect label="Year built" options={YEAR_STEPS} min={state.year} max={state.maxYear} onMin={year => set({ year })} onMax={maxYear => set({ maxYear })} format={String} />
             <label className="lf-field"><span>Time on market</span>
-              <select value={effective.days} onChange={event => set({ days: event.target.value })}>
+              <select value={state.days} onChange={event => set({ days: event.target.value })}>
                 <option value="">Any time</option>
                 {DAY_STEPS.map(option => <option key={option} value={option}>Listed in the last {option} {option === 1 ? "day" : "days"}</option>)}
               </select>
@@ -458,20 +406,20 @@ export function ListingFilter({ initial = EMPTY_FILTERS, hidden = {}, priceBins 
           </section>
           <section>
             <h3>Home features</h3>
-            <Pills label="Parking spots" options={PARKING_OPTIONS} value={effective.parking} onChange={parking => set({ parking })} />
+            <Pills label="Parking spots" options={PARKING_OPTIONS} value={state.parking} onChange={parking => set({ parking })} />
             <div className="lf-checks">
               {FEATURE_CHOICES.map(choice => <label key={choice.value}>
-                <input type="checkbox" checked={effective.features.includes(choice.value)}
-                  onChange={event => set({ features: event.target.checked ? [...new Set([...effective.features, choice.value])] : effective.features.filter(item => item !== choice.value) })} />
+                <input type="checkbox" checked={state.features.includes(choice.value)}
+                  onChange={event => set({ features: event.target.checked ? [...new Set([...state.features, choice.value])] : state.features.filter(item => item !== choice.value) })} />
                 <span>{choice.label}</span>
               </label>)}
             </div>
             <label className="lf-field"><span>Keyword in the description</span>
-              <input value={effective.text} onChange={event => set({ text: event.target.value.slice(0, 60) })} placeholder="e.g. walkout, vaulted ceilings, chef's kitchen" />
+              <input value={state.text} onChange={event => set({ text: event.target.value.slice(0, 60) })} placeholder="e.g. walkout, vaulted ceilings, chef's kitchen" />
             </label>
             <h3>Cost</h3>
             <label className="lf-field"><span>Condo fees (max / month)</span>
-              <select value={effective.fee} onChange={event => set({ fee: event.target.value })}>
+              <select value={state.fee} onChange={event => set({ fee: event.target.value })}>
                 <option value="">No max</option>
                 {FEE_STEPS.map(option => <option key={option} value={option}>{money.format(option)}</option>)}
               </select>
@@ -479,8 +427,8 @@ export function ListingFilter({ initial = EMPTY_FILTERS, hidden = {}, priceBins 
           </section>
         </div>
         <footer>
-          <button type="button" className="lf-reset" onClick={() => set({ city: "", sqft: "", maxSqft: "", year: "", maxYear: "", lot: "", days: "", parking: "", features: [], text: "", fee: "" })}>Reset all</button>
-          <button type="button" className="lf-apply" onClick={submit}>{total === null ? "See homes" : `See ${count.format(total)} homes`}</button>
+          <button type="button" className="lf-reset" onClick={() => set({ status: "", sqft: "", maxSqft: "", year: "", maxYear: "", lot: "", days: "", parking: "", features: [], text: "", fee: "" })}>Reset all</button>
+          <button type="button" className="lf-apply" onClick={submit}>{total === null ? "See homes" : `See ${count.format(total)} ${total === 1 ? "home" : "homes"}`}</button>
         </footer>
       </div>
     </div>, document.body)}
@@ -490,7 +438,7 @@ export function ListingFilter({ initial = EMPTY_FILTERS, hidden = {}, priceBins 
         <span>Showing:</span>
         {chips.map(chip => <Link className="filter-chip" href={chip.href ?? chipHref(chip.remove)} scroll={false} key={chip.label} aria-label={`Remove filter ${chip.label}`}>{chip.label}<i aria-hidden="true">×</i></Link>)}
         <Link className="filter-clear" href="/search#listing-results" scroll={false}>Clear all</Link>
-      </> : <span>All current MLS® listings across Calgary, Airdrie, Chestermere and Cochrane.</span>}
+      </> : <span>All current MLS® listings for sale across Canada.</span>}
     </div>
   </Form>;
 }

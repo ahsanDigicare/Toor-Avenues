@@ -40,6 +40,8 @@ export const SCHEMA = `
     display_listing INTEGER NOT NULL DEFAULT 1,
     originating_system TEXT,
     photos_count INTEGER,
+    photos TEXT,
+    photo TEXT,
     raw TEXT,
     synced_at TEXT NOT NULL
   );
@@ -58,13 +60,6 @@ export const SCHEMA = `
     livestream_url TEXT
   );
   CREATE INDEX IF NOT EXISTS open_houses_listing ON open_houses (listing_key, date);
-  CREATE TABLE IF NOT EXISTS photos (
-    listing_key TEXT NOT NULL REFERENCES listings (listing_key) ON DELETE CASCADE,
-    position INTEGER NOT NULL,
-    url TEXT NOT NULL,
-    preferred INTEGER NOT NULL DEFAULT 0,
-    PRIMARY KEY (listing_key, position)
-  );
   CREATE TABLE IF NOT EXISTS offices (
     office_key TEXT PRIMARY KEY,
     name TEXT,
@@ -75,6 +70,33 @@ export const SCHEMA = `
   );
   CREATE TABLE IF NOT EXISTS sync_state (key TEXT PRIMARY KEY, value TEXT);
 `;
+
+// Indexes created after migrations (they may use columns that older databases lack).
+const INDEXES = `
+  CREATE INDEX IF NOT EXISTS listings_province_city ON listings (province, city);
+  CREATE INDEX IF NOT EXISTS listings_city_community ON listings (city, community);
+`;
+
+/**
+ * Brings an older database up to the current layout. Photos used to live in a separate
+ * "photos" table (about 33 rows per listing); they are now one JSON array per listing
+ * ("photos") plus the cover photo ("photo"), which is far fewer rows nationally.
+ */
+async function migrate(db) {
+  const columns = new Set((await db.all("PRAGMA table_info(listings)")).map((column) => column.name));
+  if (!columns.has("photos")) await db.exec("ALTER TABLE listings ADD COLUMN photos TEXT");
+  if (!columns.has("photo")) await db.exec("ALTER TABLE listings ADD COLUMN photo TEXT");
+  if (await db.get("SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'photos'")) {
+    console.log("Moving photos into the listings table (one-time migration)…");
+    await db.exec(`
+      UPDATE listings SET
+        photos = (SELECT json_group_array(url) FROM (SELECT url FROM photos p WHERE p.listing_key = listings.listing_key ORDER BY position)),
+        photo = (SELECT url FROM photos p WHERE p.listing_key = listings.listing_key ORDER BY preferred DESC, position LIMIT 1);
+      UPDATE listings SET photos_count = json_array_length(photos) WHERE photos IS NOT NULL;
+      DROP TABLE photos;`);
+  }
+  await db.exec(INDEXES);
+}
 
 /** A statement for batch(): [sql, ...args]. */
 export const sql = (text, ...args) => ({ sql: text, args });
@@ -131,5 +153,6 @@ export async function openDatabase({ local = false } = {}) {
   const url = process.env.TURSO_DATABASE_URL?.trim();
   const db = url && !local ? await openTurso(url) : await openFile(path.resolve(process.env.DDF_DB_PATH || ".data/ddf.sqlite"));
   await db.exec(SCHEMA);
+  await migrate(db);
   return db;
 }

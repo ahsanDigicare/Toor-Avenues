@@ -1,4 +1,4 @@
-import { estimateValue } from "../../../../lib/listings";
+import { estimateValue, provinceName } from "../../../../lib/listings";
 
 // Home value range from comparable active listings (Sell page estimator).
 export async function GET(request: Request) {
@@ -7,6 +7,7 @@ export async function GET(request: Request) {
   const estimate = await estimateValue({
     community: params.get("community")?.slice(0, 80) || undefined,
     city: params.get("city")?.slice(0, 60) || undefined,
+    province: provinceName(params.get("province") ?? undefined),
     type: params.get("type")?.slice(0, 40) || undefined,
     beds: number("beds"),
     sqft: number("sqft"),

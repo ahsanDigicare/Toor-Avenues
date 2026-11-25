@@ -15,7 +15,7 @@ type Props = {
   hoveredId?: string | null;
 };
 
-const CALGARY: [number, number] = [51.045, -114.07];
+const CANADA: [number, number] = [53.5, -96];
 const count = new Intl.NumberFormat("en-CA");
 const shortPrice = (value: number) => value >= 995_000 ? `$${Number((value / 1_000_000).toFixed(1))}M` : `$${Math.round(value / 1000)}K`;
 const escape = (text: string) => text.replace(/[&<>"']/g, char => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[char]!);
@@ -51,7 +51,7 @@ export default function ListingsMap({ query, bounds, hoveredId = null }: Props) 
     let instance: LeafletMap | null = null;
     import("leaflet").then(({ default: L }) => {
       if (cancelled || !element.current) return;
-      instance = L.map(element.current, { center: CALGARY, zoom: 10, zoomControl: false, attributionControl: true, scrollWheelZoom: true });
+      instance = L.map(element.current, { center: CANADA, zoom: 4, zoomControl: false, attributionControl: true, scrollWheelZoom: true });
       L.control.zoom({ position: "topright" }).addTo(instance);
       L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png", {
         maxZoom: 19,
@@ -119,7 +119,7 @@ export default function ListingsMap({ query, bounds, hoveredId = null }: Props) 
         }
       };
 
-      // First view: the searched area, else all pins, else Calgary.
+      // First view: the searched area, else all pins, else all of Canada.
       programmatic.current = true;
       const area = bounds?.split(",").map(Number);
       if (area?.length === 4 && area.every(Number.isFinite)) instance.fitBounds([[area[0], area[1]], [area[2], area[3]]] as LatLngBoundsExpression);

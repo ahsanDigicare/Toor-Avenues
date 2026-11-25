@@ -39,7 +39,7 @@ export function SiteFooter() {
   return <footer className="site-footer"><div className="shell"><div className="site-footer-brand"><Link href="/">ToorAvenues</Link><p>Team of Outstanding REALTORS®. Helping you sell with confidence and buy with peace of mind.</p></div><div className="site-footer-grid">
     <div><b>EXPLORE</b>{navigation.map(([label, href]) => <Link href={href} key={href}>{label}</Link>)}<Link href="/contact">Contact</Link></div>
     <div><b>GET IN TOUCH</b><a href="tel:4039264000">403-926-4000</a><a href="tel:4039261122">403-926-1122</a><a href="mailto:info@tooravenues.com">info@tooravenues.com</a></div>
-    <div><b>CALGARY OFFICE</b><p>#700 - 1816 Crowchild Trail NW<br />Calgary, AB T2M 3Y7</p><p>Monday–Friday<br />9:00 AM–6:00 PM</p></div>
+    <div><b>HEAD OFFICE</b><p>#700 - 1816 Crowchild Trail NW<br />Calgary, AB T2M 3Y7</p><p>Monday–Friday<br />9:00 AM–6:00 PM</p></div>
   </div><div className="site-footer-legal"><span>© 2026 ToorAvenues. All rights reserved. · <Link href="/privacy-policy">Privacy policy</Link> · <a href="https://www.facebook.com/ToorAvenues/" target="_blank" rel="noopener">Facebook</a> · <a href="https://www.instagram.com/tooravenues/" target="_blank" rel="noopener">Instagram</a></span><p>Davinder Toor, REALTOR®, is registered with eXp Realty. Eknoor Toor, REALTOR®, is registered with LPT Realty. ToorAvenues is a team name and not a brokerage.</p></div></div></footer>;
 }
 

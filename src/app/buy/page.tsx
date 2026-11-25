@@ -1,23 +1,24 @@
 import type { Metadata } from "next";
 import Link from "next/link";
 import { cacheLife } from "next/cache";
-import { countListings, marketStats } from "../../lib/listings";
+import { homesInPriceRange } from "../../lib/listings";
+import { cachedMarket } from "../market-data";
 import { TYPE_CHOICES } from "../../lib/search-options";
 import { AffordabilityCalculator, ClosingCostEstimator } from "../market-tools";
 import { Faq, MarketStrip, SectionHead, Timeline, icons, type TimelineStep } from "../market-sections";
 import { InnerCta, InnerPage, PageHero } from "../site-components";
 
 export const metadata: Metadata = {
-  title: "Buy a Home in Calgary | Affordability Calculator | ToorAvenues",
-  description: "Find out how much home you can afford, estimate Alberta closing costs, browse Calgary homes by budget and type, and buy with ToorAvenues.",
+  title: "Buy a Home in Canada | Affordability & Closing Costs | ToorAvenues",
+  description: "Find out how much home you can afford, estimate land transfer tax and closing costs in any province, browse homes across Canada by budget and type, and buy with ToorAvenues.",
 };
 
 const BUDGETS = [
-  { label: "Under $400K", copy: "Condos & starter townhomes", min: 0, max: 400_000 },
-  { label: "$400K – $600K", copy: "Townhomes, duplexes & first houses", min: 400_000, max: 600_000 },
-  { label: "$600K – $800K", copy: "Family homes across the city", min: 600_000, max: 800_000 },
-  { label: "$800K – $1M", copy: "Larger homes & established areas", min: 800_000, max: 1_000_000 },
-  { label: "$1M +", copy: "Luxury, estate & inner-city infills", min: 1_000_000, max: 0 },
+  { label: "Under $400K", copy: "Condos, starter homes & smaller towns", min: 0, max: 400_000 },
+  { label: "$400K – $700K", copy: "Townhomes, duplexes & first houses", min: 400_000, max: 700_000 },
+  { label: "$700K – $1M", copy: "Family homes in most cities", min: 700_000, max: 1_000_000 },
+  { label: "$1M – $2M", copy: "Larger homes & big-city houses", min: 1_000_000, max: 2_000_000 },
+  { label: "$2M +", copy: "Luxury, estate & waterfront", min: 2_000_000, max: 0 },
 ];
 
 const TYPE_ICONS: Record<string, React.ReactNode> = {
@@ -31,15 +32,14 @@ const TYPE_ICONS: Record<string, React.ReactNode> = {
   land: <><path d="M12 21v-6" /><circle cx="12" cy="9" r="5" /><path d="M4 21h16" /></>,
 };
 
-// Live counts for the page, refreshed hourly from the synced MLS® listings.
+// Live counts for the page, from the market summary stored by each sync (no per-visit scans).
 async function buyData() {
   "use cache";
   cacheLife("hours");
-  const [stats, budgets, types] = await Promise.all([
-    marketStats(),
-    Promise.all(BUDGETS.map(async band => await countListings({ minPrice: band.min || undefined, maxPrice: band.max || undefined }) ?? 0)),
-    Promise.all(TYPE_CHOICES.map(async choice => await countListings({ type: choice.value }) ?? 0)),
-  ]);
+  const market = await cachedMarket();
+  const stats = market ? { total: market.total, fresh: market.fresh, medianPrice: market.medianPrice, medianDays: market.medianDays } : null;
+  const budgets = BUDGETS.map(band => market ? homesInPriceRange(market.priceQuantiles, market.total, band.min, band.max || Infinity) : 0);
+  const types = TYPE_CHOICES.map(choice => market?.typeCounts?.[choice.value] ?? 0);
   return { stats, budgets, types };
 }
 
@@ -65,15 +65,16 @@ const programs: [React.ReactNode, string, string, string][] = [
 const faq: [string, string][] = [
   ["How much do I need for a down payment?", "At least 5% of the first $500,000 and 10% of the portion up to $1.5M. Homes over $1.5M need 20%. Under 20% down, your mortgage needs default insurance (CMHC), which is added to the loan."],
   ["What is the mortgage stress test?", "Lenders check that you could still afford payments at the higher of 5.25% or your rate plus 2%. The affordability calculator above applies it for you."],
-  ["Do I pay land transfer tax in Alberta?", "No. Alberta charges only small land titles registration fees, so closing costs are typically around 1% of the price or less."],
-  ["Does it cost me anything to work with a buyer's agent?", "In most Calgary sales the buyer's agent is paid from the seller's proceeds. We will explain how compensation works on any home before you make an offer."],
+  ["Do I pay land transfer tax?", "It depends on the province. Ontario, BC, Manitoba, Quebec and the Atlantic provinces charge a transfer tax (Toronto adds a municipal one); Alberta, Saskatchewan and Newfoundland and Labrador charge only registration fees. First-time buyers get rebates in Ontario, Toronto, BC and PEI. The closing cost estimator above works it out for you."],
+  ["Can you help me buy in another province?", "Yes. Search any province here, and we will guide your plan and connect you with a trusted, licensed REALTOR® in that market for showings and the offer, so you are covered by someone registered where you buy."],
+  ["Does it cost me anything to work with a buyer's agent?", "In most Canadian sales the buyer's agent is paid from the seller's proceeds. We will explain how compensation works on any home before you make an offer."],
   ["How long does buying take?", "Many buyers find a home within one to three months of searching; closing is usually 30 to 60 days after your offer is accepted."],
 ];
 
 export default async function BuyPage() {
   const { stats, budgets, types } = await buyData();
   return <InnerPage>
-    <PageHero eyebrow="BUY WITH PEACE OF MIND" title="Make your next home decision with clarity." copy="Know your budget in a minute, see every cost up front, and explore live Calgary listings that fit — with a team guiding you all the way to the keys." image="property.png" />
+    <PageHero eyebrow="BUY WITH PEACE OF MIND" title="Make your next home decision with clarity." copy="Know your budget in a minute, see every cost up front for your province, and explore live listings across Canada that fit — with a team guiding you all the way to the keys." image="property.png" />
     <MarketStrip stats={stats} />
 
     <section className="mk-section shell" id="affordability">
@@ -106,13 +107,13 @@ export default async function BuyPage() {
     </section>
 
     <section className="mk-section shell" id="closing-costs">
-      <SectionHead label="CLOSING COSTS" title="Every cost, up front." copy="Estimate what you will need on top of your down payment in Alberta." />
-      <ClosingCostEstimator defaultPrice={stats?.medianPrice ? Math.round(stats.medianPrice / 5000) * 5000 : 550_000} />
+      <SectionHead label="CLOSING COSTS" title="Every cost, up front." copy="Land transfer tax, registration and professional fees for your province, on top of your down payment." />
+      <ClosingCostEstimator defaultPrice={stats?.medianPrice ? Math.round(stats.medianPrice / 5000) * 5000 : 650_000} />
     </section>
 
     <section className="mk-section mk-tinted">
       <div className="shell">
-        <SectionHead label="FIRST-TIME BUYERS" title="Programs that put money back in your pocket." copy="Federal programs available in Alberta. We will help you line them up with your lender and accountant." />
+        <SectionHead label="FIRST-TIME BUYERS" title="Programs that put money back in your pocket." copy="Federal programs available across Canada, on top of provincial rebates. We will help you line them up with your lender and accountant." />
         <div className="mk-programs">{programs.map(([icon, title, copy, tag]) => <article key={title}>
           <span aria-hidden="true"><svg viewBox="0 0 24 24" width="24" height="24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">{icon}</svg></span>
           <em>{tag}</em><h3>{title}</h3><p>{copy}</p>

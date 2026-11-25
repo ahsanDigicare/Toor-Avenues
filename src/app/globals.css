@@ -1592,6 +1592,7 @@ a.property-img { display:block; }
 .snap-strip::-webkit-scrollbar { display:none; }
 .snap-slide { position:relative; flex:0 0 100%; height:100%; margin:0; padding:0; border:0; background:#e3ebe6; scroll-snap-align:start; scroll-snap-stop:always; }
 button.snap-slide { cursor:zoom-in; }
+a.snap-slide { display:block; cursor:pointer; }
 .snap-slide img { object-fit:cover; user-select:none; -webkit-user-drag:none; }
 /* Arrows and counter always sit above the strip; arrows always visible, never moved by hover effects. */
 :is(.property-img,.ed-property-img,.mosaic-main) .card-photo-nav { z-index:5; opacity:1; }
@@ -1782,3 +1783,118 @@ button.snap-slide { cursor:zoom-in; }
   .hero-smart .sf-picks { grid-auto-columns:136px; margin-inline:0; padding-inline:0; }
   .sf-picks-arrow { display:none; }
 }
+
+/* ---------------------------------------------------------------------------
+   Search page filter in the ToorAvenues search style (matches the homepage band):
+   green card, underlined fields with labels above, white pill button.
+   ------------------------------------------------------------------------- */
+.listing-filter.lfc { overflow:visible; padding:26px 32px 18px; border:1px solid rgba(255,255,255,.14); border-radius:24px; background:#188c63; color:white; box-shadow:0 32px 80px rgba(5,22,16,.38); }
+.lfc-title { display:flex; justify-content:space-between; align-items:center; gap:16px; }
+.lfc-title h2 { margin:0; color:white; font:600 21px var(--font-heading); letter-spacing:-.01em; }
+.lfc-title a,.lfc-foot a { color:white; font-size:14px; text-decoration:none; transition:color .2s ease,transform .2s ease; }
+.lfc-title a:hover,.lfc-foot a:hover { color:#fee606; }
+.lfc-fields { position:relative; z-index:3; display:grid; grid-template-columns:170px minmax(190px,2fr) minmax(160px,1.25fr) 104px 104px minmax(150px,1fr) 200px; gap:26px; align-items:end; margin-top:20px; }
+.lfc-field { position:relative; min-width:0; display:block; }
+.lfc-label { display:block; margin-bottom:8px; color:#edf5ef; font:500 12px var(--font-label); letter-spacing:.02em; white-space:nowrap; }
+.lfc-field>input,.lfc-trigger { width:100%; height:38px; padding:0 0 9px; border:0; border-bottom:1px solid #cbd6ce; border-radius:0; outline:0; background:transparent; color:white; font:600 16px var(--font-body); transition:border-color .2s ease; }
+.lfc-field>input::placeholder { color:white; opacity:1; }
+.lfc-field>input:focus,.lfc-trigger:focus-visible,.lfc-dropdown.is-open .lfc-trigger { border-bottom-color:#fee606; }
+.lfc-trigger { display:flex; align-items:center; justify-content:space-between; gap:10px; text-align:left; cursor:pointer; }
+.lfc-trigger>span { min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.lfc-trigger>i { flex:none; display:grid; place-items:center; width:22px; height:22px; border-radius:50%; background:#edf5ef; color:#172c25; transition:transform .2s ease,background-color .2s ease; }
+.lfc-trigger:hover>i { background:#fee606; }
+.lfc-dropdown.is-open .lfc-trigger>i { transform:rotate(180deg); background:#fee606; }
+.lfc-trigger .lf-chevron { width:12px; height:12px; }
+.lfc-menu { position:absolute; z-index:40; top:calc(100% + 8px); left:-10px; width:max(100% + 20px,190px); max-height:320px; overflow:auto; padding:6px; border:1px solid var(--line); border-radius:12px; background:white; box-shadow:0 18px 45px rgba(16,41,31,.22); animation:lf-pop .16s ease-out; }
+.lfc-menu button { display:block; width:100%; padding:10px 12px; border:0; border-radius:8px; background:white; color:var(--dark); font:500 15px var(--font-body); text-align:left; white-space:nowrap; cursor:pointer; }
+.lfc-menu button:hover { background:#edf5ef; color:var(--green); }
+.lfc-menu button[aria-selected="true"] { background:var(--green); color:white; }
+.lfc .lfc-price { top:calc(100% + 10px); left:-10px; color:var(--dark); }
+.lfc-submit { height:50px; padding:0 22px; border:0; border-radius:999px; background:white; color:#188c63; font:700 16px var(--font-body); white-space:nowrap; cursor:pointer; font-variant-numeric:tabular-nums; transition:transform .2s ease,box-shadow .2s ease,background-color .2s ease; }
+.lfc-submit:hover { background:#fee606; color:#172c25; transform:translateY(-2px); box-shadow:0 10px 24px rgba(0,0,0,.2); }
+.lfc-foot { display:flex; justify-content:space-between; align-items:center; gap:16px; margin-top:18px; }
+.lfc-more { display:inline-flex; align-items:center; gap:8px; padding:0; border:0; background:none; color:white; font:600 14px var(--font-body); cursor:pointer; transition:color .2s ease; }
+.lfc-more:hover { color:#fee606; }
+.lfc-more b { display:grid; place-items:center; min-width:20px; height:20px; padding:0 6px; border-radius:999px; background:#fee606; color:#172c25; font-size:12px; }
+.lfc .listing-filter-foot { margin-top:14px; border-top-color:rgba(255,255,255,.22); color:rgba(255,255,255,.8); }
+.lfc .listing-filter-foot>span,.lfc .listing-filter-foot>span:only-child { color:rgba(255,255,255,.85); }
+.lfc .filter-chip { background:rgba(255,255,255,.16); color:white; }
+.lfc .filter-chip i { background:white; color:#188c63; }
+.lfc .filter-chip:hover { background:white; color:#188c63; }
+.lfc .filter-clear { color:rgba(255,255,255,.85); }
+.lfc .filter-clear:hover { color:#fee606; }
+.lfc :focus-visible { outline:2px solid #fee606; outline-offset:3px; }
+
+@media (max-width:1200px) {
+  .lfc-fields { grid-template-columns:repeat(3,minmax(0,1fr)); gap:22px 26px; }
+  .lfc-wide { grid-column:span 2; }
+  .lfc-submit { grid-column:span 2; }
+}
+.lfc-title a { flex:none; white-space:nowrap; }
+
+/* Hero without the built-in search: shorter, with the content centred instead of pinned
+   to the bottom (which left a large empty band above the headline). */
+.cine-hero { justify-content:center; min-height:min(76vh,700px); padding:64px 0 56px; }
+@media (max-width:1100px) {
+  .cine-hero { min-height:0; padding:72px 0 48px; }
+}
+@media (max-width:760px) {
+  .cine-hero { padding:48px 0 32px; }
+}
+
+/* Property photos have square corners everywhere (cards, listing photos, galleries,
+   thumbnails, comparables, map pop-ups). */
+.ed-property-img,.property-img,.mosaic,.listing-sticky-photo,.listing-gallery-stage,.listing-gallery.modal .listing-gallery-stage,
+.listing-gallery-thumbs button,.lightbox-thumbs button,.mt-comp>span,.map-popup .leaflet-popup-content-wrapper,
+.ed-property-img img,.property-img img,.mosaic img,.listing-sticky-photo img { border-radius:0; }
+@media (max-width:760px) {
+  .mosaic,.listing-gallery-stage { border-radius:0; }
+}
+@media (max-width:760px) {
+  .listing-filter.lfc { padding:22px 18px 16px; border-radius:20px; }
+  .lfc-title h2 { font-size:19px; }
+  .lfc-fields { grid-template-columns:1fr 1fr; gap:20px; }
+  .lfc-fields>.lfc-field:first-child,.lfc-wide,.lfc-submit { grid-column:1 / -1; }
+  .lfc-field>input,.lfc-trigger { font-size:16px; }
+  .lfc-menu { width:max(100%,170px); left:0; }
+  .lfc-foot { flex-direction:column; align-items:flex-start; gap:10px; }
+}
+
+
+/* ---------------------------------------------------------------------------
+   Homepage "Top markets": the busiest cities in Canada (live photo, homes for sale,
+   typical price) and every province with its count.
+   ------------------------------------------------------------------------- */
+.ed-market-grid { display:grid; grid-template-columns:repeat(4,1fr); grid-auto-rows:250px; gap:18px; margin-top:56px; }
+.ed-market { position:relative; isolation:isolate; display:flex; flex-direction:column; justify-content:flex-end; overflow:hidden; padding:22px; background:#dfe7e1; color:white; text-decoration:none; }
+.ed-market.wide { grid-column:span 2; grid-row:span 2; padding:30px; }
+.ed-market img { z-index:-2; object-fit:cover; transition:transform .7s cubic-bezier(.2,.7,.2,1); }
+.ed-market:hover img { transform:scale(1.06); }
+.ed-market .shade { position:absolute; inset:0; z-index:-1; background:linear-gradient(180deg,rgba(10,30,22,0) 35%,rgba(10,30,22,.82)); }
+.ed-market small { color:#fee606; font:600 11px var(--font-label); letter-spacing:.12em; }
+.ed-market h3 { margin:6px 0 4px; font:600 26px/1.1 var(--font-heading); letter-spacing:-.02em; }
+.ed-market.wide h3 { font-size:44px; }
+.ed-market p { margin:0; color:rgba(255,255,255,.86); font-size:14px; }
+.ed-market::after { content:"→"; position:absolute; top:18px; right:18px; display:grid; place-items:center; width:36px; height:36px; border-radius:50%; background:rgba(255,255,255,.18); color:white; backdrop-filter:blur(6px); opacity:0; transform:translateX(-6px); transition:opacity .25s ease,transform .25s ease; }
+.ed-market:hover::after,.ed-market:focus-visible::after { opacity:1; transform:none; }
+.ed-provinces { display:flex; flex-wrap:wrap; align-items:center; gap:10px; margin-top:34px; }
+.ed-provinces>span { margin-right:6px; color:var(--ed-muted); font:500 13px var(--font-label); letter-spacing:.06em; text-transform:uppercase; }
+.ed-provinces a { display:inline-flex; align-items:center; gap:8px; padding:9px 14px; border:1px solid var(--ed-line); border-radius:999px; color:var(--ed-dark); font-size:14px; text-decoration:none; transition:border-color .2s ease,background-color .2s ease,color .2s ease; }
+.ed-provinces a b { color:var(--ed-green); font-weight:600; font-variant-numeric:tabular-nums; }
+.ed-provinces a:hover { border-color:var(--ed-green); background:var(--ed-green); color:white; }
+.ed-provinces a:hover b { color:#fee606; }
+.ed-markets .ed-text-link { margin-top:30px; }
+@media (max-width:1050px) {
+  .ed-market-grid { grid-template-columns:repeat(2,1fr); grid-auto-rows:220px; }
+}
+@media (max-width:760px) {
+  .ed-market-grid { grid-template-columns:1fr 1fr; grid-auto-rows:180px; gap:10px; margin-top:34px; }
+  .ed-market { padding:14px; }
+  .ed-market.wide { grid-column:span 2; grid-row:span 1; padding:18px; }
+  .ed-market h3,.ed-market.wide h3 { font-size:20px; }
+  .ed-market.wide h3 { font-size:28px; }
+  .ed-market p { font-size:12px; }
+}
+.mt-check { display:flex; align-items:center; gap:10px; color:var(--dark); font:500 15px var(--font-body); cursor:pointer; }
+.mt-check input { width:18px; height:18px; accent-color:var(--green); }
+.mt-field>span small { color:var(--muted); font-weight:400; }

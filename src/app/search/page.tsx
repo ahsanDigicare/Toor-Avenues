@@ -1,21 +1,22 @@
 import type { Metadata } from "next";
 import { cacheLife } from "next/cache";
 import { Suspense } from "react";
-import { allListingPrices, countListings, hasLiveListings, parseListingFilters, propertyTypeLabel, searchListings } from "../../lib/listings";
-import { PRICE_STEPS, cityLabel } from "../../lib/search-options";
+import { countListings, hasLiveListings, parseListingFilters, priceBins, propertyTypeLabel, searchListings } from "../../lib/listings";
+import { PRICE_STEPS, cityLabel, findProvince } from "../../lib/search-options";
+import { cachedMarket, provinceOfCity, searchSuggestions } from "../market-data";
 import { DdfNotice } from "../ddf-notice";
 import { ListingFilter, type FilterState } from "../listing-filter";
 import { PropertyExplorer } from "../real-estate-tools";
 import { InnerPage } from "../site-components";
 
-export const metadata: Metadata = { title: "Search Calgary Homes for Sale | ToorAvenues", description: "Explore Calgary homes and prepare a personalized property search with the ToorAvenues team." };
+export const metadata: Metadata = { title: "Search Homes for Sale Across Canada | ToorAvenues", description: "Search live MLS® listings in every province with homes on REALTOR.ca DDF®: filter by city, price, beds, baths and more, then plan your move with the ToorAvenues team." };
 
 type SearchParams = PageProps<"/search">["searchParams"];
 type Params = Awaited<SearchParams>;
 
 // Filters carried through sort and pagination links (sort/page themselves are added per link).
 // Includes the previous site's parameter names so old links keep their filters when paging.
-const FILTER_FIELDS = ["city", "query", "price", "beds", "baths", "type", "sqft", "year", "new", "openhouse", "min", "max", "zone",
+const FILTER_FIELDS = ["province", "city", "query", "price", "beds", "baths", "type", "sqft", "year", "new", "openhouse", "min", "max", "zone",
   "status", "features", "keyword", "q", "kw", "mls", "property_type", "min_price", "max_price", "minPrice", "maxPrice", "maxBeds",
   "minSqft", "maxSqft", "minYear", "maxYear", "lot", "days", "parking", "fee", "text", "bounds"] as const;
 
@@ -24,16 +25,12 @@ function value(params: Params, key: string) {
   return (Array.isArray(raw) ? raw[0] : raw) ?? "";
 }
 
-// Listing counts per price-slider step for the price histogram (refreshed hourly).
+// Homes per price-slider step for the price histogram (from the stored market summary).
 async function priceHistogram() {
   "use cache";
   cacheLife("hours");
-  const bins = PRICE_STEPS.map(() => 0);
-  for (const price of await allListingPrices()) {
-    const next = PRICE_STEPS.findIndex(step => step > price);
-    bins[next < 0 ? PRICE_STEPS.length - 1 : Math.max(0, next - 1)]++;
-  }
-  return bins;
+  const market = await cachedMarket();
+  return market ? priceBins(market.priceQuantiles, market.total, PRICE_STEPS) : PRICE_STEPS.map(() => 0);
 }
 
 // The filter card shows the filters actually applied, whichever link or form produced them
@@ -43,9 +40,13 @@ async function SearchForm({ searchParams }: { searchParams: SearchParams }) {
   const filters = parseListingFilters(params);
   const city = cityLabel(filters.city, filters.zone);
   const text = (n?: number) => n ? String(n) : "";
+  // A plain city filter is shown in the search box as "Toronto, ON" (the box is where cities are typed).
+  const cityInBox = Boolean(filters.city && !filters.zone && !filters.query);
+  const provinceCode = findProvince(filters.province ?? (cityInBox ? await provinceOfCity(filters.city!) : undefined))?.code ?? "";
   const initial: FilterState = {
-    query: filters.query ?? "",
-    city: filters.city || filters.zone ? city ?? filters.city ?? "" : "",
+    query: filters.query ?? (cityInBox ? [filters.city, provinceCode].filter(Boolean).join(", ") : ""),
+    province: provinceCode,
+    city: cityInBox ? "" : filters.city || filters.zone ? city ?? filters.city ?? "" : "",
     status: filters.openHouse ? "open-house" : filters.newOnly ? "new" : "",
     min: text(filters.minPrice),
     max: text(filters.maxPrice),
@@ -68,8 +69,9 @@ async function SearchForm({ searchParams }: { searchParams: SearchParams }) {
   if (filters.zone && city === null) hidden.zone = filters.zone;
   if (filters.maxBeds) hidden.maxBeds = String(filters.maxBeds);
   if (filters.bounds) hidden.bounds = filters.bounds.join(",");
-  const [bins, total] = await Promise.all([priceHistogram(), countListings(filters)]);
-  return <ListingFilter key={JSON.stringify([initial, hidden])} initial={initial} hidden={hidden} priceBins={bins} initialTotal={total} initialPanel={value(params, "more") === "1" ? "more" : null} />;
+  const [bins, total, suggestions] = await Promise.all([priceHistogram(), countListings(filters), searchSuggestions()]);
+  return <ListingFilter key={JSON.stringify([initial, hidden])} initial={initial} hidden={hidden} priceBins={bins} initialTotal={total}
+    initialPanel={value(params, "more") === "1" ? "more" : null} cities={suggestions.cities} provinces={suggestions.provinces} />;
 }
 
 async function Results({ searchParams }: { searchParams: SearchParams }) {
@@ -88,12 +90,12 @@ async function IntroCopy() {
   "use cache";
   cacheLife("hours");
   return await hasLiveListings()
-    ? <><h2>Explore Calgary real estate.</h2><span>Current MLS® System listings across Calgary and surrounding communities, updated regularly from the REALTOR.ca DDF®.</span></>
-    : <><h2>Start exploring Calgary real estate.</h2><span>These examples preview the search experience. Live IDX data will replace them before launch.</span></>;
+    ? <><h2>Explore real estate across Canada.</h2><span>Current MLS® System listings from coast to coast, updated every few hours from the REALTOR.ca DDF®.</span></>
+    : <><h2>Start exploring Canadian real estate.</h2><span>These examples preview the search experience. Live listings appear after the first sync.</span></>;
 }
 
 export default function SearchPage({ searchParams }: PageProps<"/search">) {
-  return <InnerPage><section className="search-route-hero"><div className="shell"><p>CALGARY &amp; SURROUNDING AREAS</p><h1>Find a home that fits what comes next.</h1><span>Explore homes for sale, then connect with our team for guided tours and personal advice.</span></div><Suspense fallback={<ListingFilter />}><SearchForm searchParams={searchParams} /></Suspense></section>
+  return <InnerPage><section className="search-route-hero"><div className="shell"><p>HOMES FOR SALE ACROSS CANADA</p><h1>Find a home that fits what comes next.</h1><span>Explore homes for sale, then connect with our team for guided tours and personal advice.</span></div><Suspense fallback={<ListingFilter />}><SearchForm searchParams={searchParams} /></Suspense></section>
     <section className="search-results-page shell"><div className="intro-grid"><p>HOMES FOR SALE</p><div><IntroCopy /></div></div><Suspense fallback={<div id="listing-results" aria-busy="true" />}><Results searchParams={searchParams} /></Suspense></section></InnerPage>;
 }
 

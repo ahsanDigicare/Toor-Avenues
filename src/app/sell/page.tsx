@@ -1,22 +1,25 @@
 import type { Metadata } from "next";
 import Link from "next/link";
 import { cacheLife } from "next/cache";
-import { communitySnapshot, estimateCommunities, marketStats } from "../../lib/listings";
+import { cachedMarket } from "../market-data";
 import { HomeValueEstimator, NetProceedsCalculator } from "../market-tools";
 import { Faq, MarketStrip, SectionHead, Timeline, icons, type TimelineStep } from "../market-sections";
 import { InnerCta, InnerPage, PageHero } from "../site-components";
 
 export const metadata: Metadata = {
-  title: "Sell Your Calgary Home | Free Home Value Estimate | ToorAvenues",
-  description: "Get an instant home value estimate from live Calgary listings, see what you'll net after costs, and sell with a personalized ToorAvenues strategy.",
+  title: "Sell Your Home | Free Home Value Estimate Anywhere in Canada | ToorAvenues",
+  description: "Get an instant home value estimate from live listings in your city, see what you'll net after costs, and sell with a personalized ToorAvenues strategy.",
 };
 
-// Market data for the page, refreshed hourly from the synced MLS® listings.
+// Market data for the page, from the market summary stored by each sync.
 async function sellData() {
   "use cache";
   cacheLife("hours");
-  const [stats, communities, snapshot] = await Promise.all([marketStats(), estimateCommunities(), communitySnapshot(10)]);
-  return { stats, communities, snapshot };
+  const market = await cachedMarket();
+  const stats = market ? { total: market.total, fresh: market.fresh, medianPrice: market.medianPrice, medianDays: market.medianDays } : null;
+  // Cities with enough homes to estimate from, for the estimator's city picker.
+  const cities = (market?.cities ?? []).filter(city => city.count >= 15).map(({ city, province, code, count }) => ({ city, province, code, count }));
+  return { stats, cities, snapshot: market?.cities.slice(0, 12) ?? [] };
 }
 
 const money = new Intl.NumberFormat("en-CA", { style: "currency", currency: "CAD", maximumFractionDigits: 0 });
@@ -40,21 +43,21 @@ const marketing: [React.ReactNode, string, string][] = [
 
 const faq: [string, string][] = [
   ["How accurate is the instant estimate?", "It is a starting point based on comparable homes for sale right now (asking prices). A full evaluation also weighs recent sold prices, condition, upgrades and lot — that is what we prepare for you, free."],
-  ["When is the best time to sell in Calgary?", "Spring usually brings the most buyers, but less competition in fall and winter can work in your favour. We look at current inventory in your community before recommending a launch date."],
+  ["When is the best time to sell?", "In most Canadian markets spring brings the most buyers, but less competition in fall and winter can work in your favour. We look at current inventory in your city and community before recommending a launch date."],
   ["What does it cost to sell?", "The main costs are commission, legal fees and your mortgage payout. Use the net proceeds calculator above for a quick picture; we will give you exact numbers before you list."],
   ["Should I renovate before selling?", "Usually only small, high-return items: paint, lighting, repairs and staging. We will tell you what is worth doing — and what is not — for your home and price point."],
   ["Can I buy and sell at the same time?", "Yes. We plan the timing, conditions and possession dates of both sides together so you are not carrying two homes or rushing a move."],
 ];
 
 export default async function SellPage() {
-  const { stats, communities, snapshot } = await sellData();
+  const { stats, cities, snapshot } = await sellData();
   return <InnerPage>
     <PageHero eyebrow="SELL WITH CONFIDENCE" title="A selling strategy designed around your home." copy="See what your home could be worth in seconds, what you would walk away with, and how we get you there — with evidence, not guesswork." image="architecture.png" />
     <MarketStrip stats={stats} />
 
     <section className="mk-section shell" id="home-value">
-      <SectionHead label="INSTANT HOME VALUE" title="What is your home worth today?" copy="Pick your community and home details. We compare it with similar homes for sale right now and show you the range — plus the listings it is based on." />
-      <HomeValueEstimator communities={communities} />
+      <SectionHead label="INSTANT HOME VALUE" title="What is your home worth today?" copy="Pick your city (and community, if you like) and your home details. We compare it with similar homes for sale right now and show you the range — plus the listings it is based on." />
+      <HomeValueEstimator cities={cities} />
     </section>
 
     <section className="mk-section mk-tinted">
@@ -78,15 +81,15 @@ export default async function SellPage() {
     </section>
 
     {snapshot.length > 0 && <section className="mk-section shell">
-      <SectionHead label="COMMUNITY SNAPSHOT" title="What is happening in the busiest communities." copy="Typical asking prices and price per square foot from homes for sale right now." />
+      <SectionHead label="MARKET SNAPSHOT" title="What is happening in Canada’s busiest markets." copy="Homes for sale, typical asking prices and price per square foot in the cities with the most listings right now." />
       <div className="mk-table-wrap"><table className="mk-table">
-        <thead><tr><th>Community</th><th>Homes for sale</th><th>Typical asking price</th><th>Price / sq ft</th><th /></tr></thead>
-        <tbody>{snapshot.map(row => <tr key={`${row.community}-${row.city}`}>
-          <td><b>{row.community}</b><small>{row.city}</small></td>
-          <td>{row.count}</td>
+        <thead><tr><th>City</th><th>Homes for sale</th><th>Typical asking price</th><th>Price / sq ft</th><th /></tr></thead>
+        <tbody>{snapshot.map(row => <tr key={`${row.city}-${row.code}`}>
+          <td><b>{row.city}</b><small>{row.province}</small></td>
+          <td>{row.count.toLocaleString("en-CA")}</td>
           <td>{money.format(row.medianPrice)}</td>
           <td>{row.medianPpsf ? `$${row.medianPpsf}` : "—"}</td>
-          <td><Link href={`/search?query=${encodeURIComponent(row.community)}#listing-results`}>View homes →</Link></td>
+          <td><Link href={`/search?city=${encodeURIComponent(row.city)}&province=${row.code}#listing-results`}>View homes →</Link></td>
         </tr>)}</tbody>
       </table></div>
     </section>}

@@ -41,7 +41,7 @@ export async function generateMetadata({ params }: PageProps<"/listing/[slug]">)
   const result = await getListing(slug);
   if (!result) return { title: "Listing no longer available | ToorAvenues", robots: { index: false } };
   const { listing } = result;
-  const city = listing.city ?? "Calgary";
+  const city = listing.city ?? "Canada";
   const beds = listing.beds ? `${listing.beds} Bed ` : "";
   const title = `${listing.showAddress ? `${listing.address}, ${city}` : `Home for sale in ${city}`} | ${beds}${listing.type} for Sale ${shortPrice(listing.price)}`;
   const description = [
@@ -64,7 +64,7 @@ function structuredData(listing: ListingDetail) {
   return {
     "@context": "https://schema.org",
     "@type": "RealEstateListing",
-    name: listing.showAddress ? `${listing.address}, ${listing.city ?? ""}`.trim() : `Home for sale in ${listing.city ?? "Alberta"}`,
+    name: listing.showAddress ? `${listing.address}, ${listing.city ?? ""}`.trim() : `Home for sale in ${listing.city ?? "Canada"}`,
     url: `${site}/listing/${listing.slug}`,
     datePosted: listing.listedAt ?? undefined,
     dateModified: listing.modifiedAt ?? undefined,

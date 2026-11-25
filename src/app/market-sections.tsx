@@ -14,7 +14,7 @@ export function SectionHead({ label, title, copy, id }: { label: string; title: 
 /** Live market numbers pulled from the current MLS® listings. */
 export function MarketStrip({ stats }: { stats: MarketStats | null }) {
   if (!stats || !stats.total) return null;
-  return <section className="mk-strip shell" aria-label="Calgary-area market right now">
+  return <section className="mk-strip shell" aria-label="Canadian market right now">
     <p><span className="cine-live" aria-hidden="true" />LIVE MARKET · UPDATED FROM MLS® LISTINGS</p>
     <dl>
       <div><dt>Homes for sale</dt><dd><CountUp value={stats.total} /></dd></div>

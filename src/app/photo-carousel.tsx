@@ -1,6 +1,7 @@
 "use client";
 
 import Image from "next/image";
+import Link from "next/link";
 import { useEffect, useRef, useState } from "react";
 
 // ---------------------------------------------------------------------------
@@ -22,9 +23,11 @@ type Props = {
   priority?: boolean;
   /** Clicking a photo opens it (e.g. in a full-screen gallery). */
   onOpen?: (index: number) => void;
+  /** Clicking a photo goes to this page (e.g. the listing's detail page from a card). */
+  href?: string;
 };
 
-export function PhotoCarousel({ photos: initial, count, fetchKey, alt, sizes, priority = false, onOpen }: Props) {
+export function PhotoCarousel({ photos: initial, count, fetchKey, alt, sizes, priority = false, onOpen, href }: Props) {
   const [photos, setPhotos] = useState(initial);
   const [index, setIndex] = useState(0);
   const strip = useRef<HTMLDivElement>(null);
@@ -95,6 +98,8 @@ export function PhotoCarousel({ photos: initial, count, fetchKey, alt, sizes, pr
       {photos.map((src, i) => {
         const image = <Image src={src} alt={i === 0 ? alt : `${alt}, photo ${i + 1}`} fill sizes={sizes}
           priority={priority && i === 0} loading={priority && i === 0 ? undefined : Math.abs(i - index) <= 1 ? "eager" : "lazy"} draggable={false} />;
+        // Only the first photo is a tab stop; the arrows move through the rest.
+        if (href) return <Link href={href} className="snap-slide" key={src} draggable={false} tabIndex={i === 0 ? undefined : -1} aria-label={i === 0 ? `View details: ${alt.replace(/^Photo of /, "")}` : undefined}>{image}</Link>;
         return onOpen
           ? <button type="button" className="snap-slide" key={src} onClick={() => onOpen(i)} aria-label={`Open photo ${i + 1} of ${total}`}>{image}</button>
           : <div className="snap-slide" key={src}>{image}</div>;
