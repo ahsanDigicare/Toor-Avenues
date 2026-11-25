@@ -1753,3 +1753,32 @@ button.snap-slide { cursor:zoom-in; }
   .mk-types { grid-template-columns:1fr 1fr; }
   .mk-types a { flex-direction:column; align-items:flex-start; }
 }
+
+/* ---------------------------------------------------------------------------
+   Hero quick picks: one tidy row of 8 on desktop; on smaller screens a swipeable
+   strip with no scrollbar, soft edge fades and round arrow buttons.
+   ------------------------------------------------------------------------- */
+.sf-picks-wrap { position:relative; }
+.sf-picks-wrap .sf-picks { scrollbar-width:none; -webkit-overflow-scrolling:touch; }
+.sf-picks-wrap .sf-picks::-webkit-scrollbar { display:none; }
+.sf-picks-wrap:not([data-end]) .sf-picks { -webkit-mask-image:linear-gradient(90deg,#000 calc(100% - 70px),transparent); mask-image:linear-gradient(90deg,#000 calc(100% - 70px),transparent); }
+.sf-picks-wrap:not([data-start]) .sf-picks { -webkit-mask-image:linear-gradient(90deg,transparent,#000 70px); mask-image:linear-gradient(90deg,transparent,#000 70px); }
+.sf-picks-wrap:not([data-start]):not([data-end]) .sf-picks { -webkit-mask-image:linear-gradient(90deg,transparent,#000 70px,#000 calc(100% - 70px),transparent); mask-image:linear-gradient(90deg,transparent,#000 70px,#000 calc(100% - 70px),transparent); }
+.sf-picks-arrow { position:absolute; z-index:2; top:50%; display:grid; place-items:center; width:36px; height:36px; padding:0; border:0; border-radius:50%; background:white; color:#0b2a1f; box-shadow:0 8px 22px rgba(0,0,0,.3); cursor:pointer; transform:translateY(-50%); transition:opacity .2s ease,transform .2s ease,background-color .2s ease; }
+.sf-picks-arrow.prev { left:-6px; }
+.sf-picks-arrow.next { right:-6px; }
+.sf-picks-arrow:hover { background:#fee606; transform:translateY(-50%) scale(1.06); }
+.sf-picks-wrap[data-start] .sf-picks-arrow.prev,.sf-picks-wrap[data-end] .sf-picks-arrow.next { opacity:0; pointer-events:none; }
+
+.hero-smart .sf-picks { grid-template-columns:repeat(8,minmax(0,1fr)); gap:8px; padding:4px 0 6px; }
+.hero-smart .sf-picks button { flex-direction:column; align-items:flex-start; gap:10px; padding:12px; border-radius:16px; }
+.hero-smart .sf-picks i { width:34px; height:34px; border-radius:10px; }
+.hero-smart .sf-picks b { font-size:14px; }
+.hero-smart .sf-picks small { margin-top:3px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+@media (max-width:1100px) {
+  .hero-smart .sf-picks { grid-template-columns:none; grid-auto-flow:column; grid-auto-columns:148px; }
+}
+@media (max-width:760px) {
+  .hero-smart .sf-picks { grid-auto-columns:136px; margin-inline:0; padding-inline:0; }
+  .sf-picks-arrow { display:none; }
+}

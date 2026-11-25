@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { EMPTY_FILTERS } from "../lib/search-options";
 import { parseSmartSearch } from "../lib/smart-search";
 import { EXAMPLES, QUICK_PICKS, icon, merge, toParams, useRollingNumber } from "./listing-filter";
@@ -42,6 +42,23 @@ export default function HomeSmartSearch({ variant = "band" }: { variant?: "band"
     return () => window.clearInterval(timer);
   }, [draft, focused]);
 
+  // Quick picks scroll sideways when they don't fit: track which ends are reachable for the arrows and edge fades.
+  const picksRef = useRef<HTMLDivElement>(null);
+  const [edges, setEdges] = useState({ start: true, end: true });
+  useEffect(() => {
+    const strip = picksRef.current;
+    if (!strip) return;
+    const update = () => setEdges({ start: strip.scrollLeft <= 4, end: strip.scrollLeft + strip.clientWidth >= strip.scrollWidth - 4 });
+    const observer = new ResizeObserver(update); // also fires once on observe
+    observer.observe(strip);
+    strip.addEventListener("scroll", update, { passive: true });
+    return () => { observer.disconnect(); strip.removeEventListener("scroll", update); };
+  }, []);
+  const scrollPicks = (direction: 1 | -1) => {
+    const strip = picksRef.current;
+    if (strip) strip.scrollBy({ left: direction * strip.clientWidth * 0.8, behavior: "smooth" });
+  };
+
   const go = (params: string) => router.push(`/search${params ? `?${params}` : ""}#listing-results`);
 
   const hero = variant === "hero";
@@ -77,10 +94,14 @@ export default function HomeSmartSearch({ variant = "band" }: { variant?: "band"
         </> : <span>Search the way you’d say it — beds, budget, area and must-haves — or start with a quick pick.</span>}
       </div>
 
-      <div className="sf-picks" role="group" aria-label="Quick picks">
-        {QUICK_PICKS.map(pick => <button type="button" key={pick.title} onClick={() => go(toParams(merge(EMPTY_FILTERS, pick.patch), {}).toString())}>
-          <i>{icon(pick.icon, 20)}</i><span><b>{pick.title}</b><small>{pick.copy}</small></span>
-        </button>)}
+      <div className="sf-picks-wrap" data-start={edges.start || undefined} data-end={edges.end || undefined}>
+        <button type="button" className="sf-picks-arrow prev" aria-label="Previous quick picks" tabIndex={-1} onClick={() => scrollPicks(-1)}>{icon(<path d="m15 18-6-6 6-6" />, 18)}</button>
+        <div className="sf-picks" role="group" aria-label="Quick picks" ref={picksRef}>
+          {QUICK_PICKS.map(pick => <button type="button" key={pick.title} onClick={() => go(toParams(merge(EMPTY_FILTERS, pick.patch), {}).toString())}>
+            <i>{icon(pick.icon, 20)}</i><span><b>{pick.title}</b><small>{pick.copy}</small></span>
+          </button>)}
+        </div>
+        <button type="button" className="sf-picks-arrow next" aria-label="More quick picks" tabIndex={-1} onClick={() => scrollPicks(1)}>{icon(<path d="m9 18 6-6-6-6" />, 18)}</button>
       </div>
 
       <div className="ed-search-foot"><Link href="/search?more=1#listing-results">+ All filters</Link><Link href="#updates">Save your search &amp; get listing updates →</Link></div>
